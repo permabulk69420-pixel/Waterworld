@@ -225,6 +225,11 @@ export class Game {
     this.chunks.update(_head);
     this.environment.update(_head, elapsed);
 
+    // Runtime content gets the same authoritative player position once per game
+    // frame. Small vegetation can therefore use a much shorter distance than the
+    // terrain streamer without running a second animation loop.
+    this.content.update(dt, _head);
+
     // --- debug -----------------------------------------------------------
     const stats = this.collectStats(presenting);
     this.hud.update(dt, stats);

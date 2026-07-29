@@ -24,6 +24,9 @@ import type { Handedness, VRHands } from '../player/VRHands.ts';
 
 export type GameMode = 'story' | 'build';
 
+type Vec3Tuple = [number, number, number];
+type QuatTuple = [number, number, number, number];
+
 interface BuildAssetDefinition {
   id: string;
   label: string;
@@ -35,9 +38,9 @@ interface BuildAssetDefinition {
 interface PlacedObjectRecord {
   id: string;
   assetId: string;
-  position: [number, number, number];
-  rotation: [number, number, number, number];
-  scale: [number, number, number];
+  position: Vec3Tuple;
+  rotation: QuatTuple;
+  scale: Vec3Tuple;
 }
 
 interface LayoutFile {
@@ -51,7 +54,6 @@ interface RuntimeObject {
 }
 
 interface PanelButton {
-  label: string;
   action: string;
   x: number;
   y: number;
@@ -74,17 +76,48 @@ const _head = new Vector3();
 const _headQuat = new Quaternion();
 const _controllerQuat = new Quaternion();
 const _forward = new Vector3();
-const _scale = new Vector3();
+
+function vec3Tuple(value: Vector3): Vec3Tuple {
+  return [value.x, value.y, value.z];
+}
+
+function quatTuple(value: Quaternion): QuatTuple {
+  return [value.x, value.y, value.z, value.w];
+}
+
+function copyVec3(value: Vec3Tuple): Vec3Tuple {
+  return [value[0], value[1], value[2]];
+}
+
+function copyQuat(value: QuatTuple): QuatTuple {
+  return [value[0], value[1], value[2], value[3]];
+}
 
 function newId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return `placed-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function isNumberTuple(value: unknown, length: number): value is number[] {
+  return Array.isArray(value) && value.length === length && value.every((entry) => typeof entry === 'number');
+}
+
+function isPlacedRecord(value: unknown): value is PlacedObjectRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<PlacedObjectRecord>;
+  return (
+    typeof record.id === 'string' &&
+    typeof record.assetId === 'string' &&
+    isNumberTuple(record.position, 3) &&
+    isNumberTuple(record.rotation, 4) &&
+    isNumberTuple(record.scale, 3)
+  );
 }
 
 function isLayoutFile(value: unknown): value is LayoutFile {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<LayoutFile>;
-  return candidate.version === 1 && Array.isArray(candidate.objects);
+  return candidate.version === 1 && Array.isArray(candidate.objects) && candidate.objects.every(isPlacedRecord);
 }
 
 function isAssetCatalog(value: unknown): value is BuildAssetDefinition[] {
@@ -97,12 +130,12 @@ function isAssetCatalog(value: unknown): value is BuildAssetDefinition[] {
 }
 
 /**
- * Loads hand-authored world objects in both Story and Build modes.
+ * Authored-object layer shared by Story and Build modes.
  *
- * Build mode adds a deliberately small VR editor on top: hold the left trigger
- * to open the panel, point/click with the right trigger, and use either grip to
- * physically move the selected object. The repo remains the source of GLBs;
- * there is intentionally no browser/device file picker.
+ * The repository is the only GLB source. Build mode simply enables placement
+ * tools over the same authored layer Story mode loads. Hold left trigger for
+ * the in-world menu, point/click with right trigger, and use either grip to
+ * physically move the selected object.
  */
 export class BuildSystem {
   readonly ready: Promise<void>;
@@ -122,13 +155,12 @@ export class BuildSystem {
   private grabbedBy: Handedness | null = null;
 
   private readonly selectionBox = new BoxHelper(new Object3D(), 0x65e7ff);
-
   private readonly panelCanvas = document.createElement('canvas');
   private readonly panelTexture: CanvasTexture;
   private readonly panelMesh: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private readonly panelRoot = new Group();
   private readonly panelButtons: PanelButton[] = [];
-  private readonly pointerLine: Line;
+  private readonly pointerLine: Line<BufferGeometry, LineBasicMaterial>;
 
   private leftTriggerHeld = false;
   private rightTriggerHeld = false;
@@ -137,7 +169,7 @@ export class BuildSystem {
   private status = 'ready';
 
   constructor(
-    private readonly scene: Scene,
+    scene: Scene,
     private readonly renderer: WebGLRenderer,
     private readonly rig: PlayerRig,
     private readonly hands: VRHands,
@@ -148,24 +180,25 @@ export class BuildSystem {
 
     this.selectionBox.name = 'build-selection-box';
     this.selectionBox.visible = false;
-    const boxMaterial = this.selectionBox.material as LineBasicMaterial;
-    boxMaterial.depthTest = false;
-    boxMaterial.transparent = true;
-    boxMaterial.opacity = 0.9;
+    this.selectionBox.material.depthTest = false;
+    this.selectionBox.material.transparent = true;
+    this.selectionBox.material.opacity = 0.9;
     this.selectionBox.renderOrder = 999;
     scene.add(this.selectionBox);
 
     this.panelCanvas.width = PANEL_WIDTH_PX;
     this.panelCanvas.height = PANEL_HEIGHT_PX;
     this.panelTexture = new CanvasTexture(this.panelCanvas);
-    const panelMaterial = new MeshBasicMaterial({
-      map: this.panelTexture,
-      transparent: true,
-      side: DoubleSide,
-      depthTest: false,
-      depthWrite: false,
-    });
-    this.panelMesh = new Mesh(new PlaneGeometry(PANEL_WORLD_WIDTH, PANEL_WORLD_HEIGHT), panelMaterial);
+    this.panelMesh = new Mesh(
+      new PlaneGeometry(PANEL_WORLD_WIDTH, PANEL_WORLD_HEIGHT),
+      new MeshBasicMaterial({
+        map: this.panelTexture,
+        transparent: true,
+        side: DoubleSide,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
     this.panelMesh.name = 'build-panel';
     this.panelMesh.renderOrder = 1001;
     this.panelRoot.name = 'build-panel-root';
@@ -177,8 +210,15 @@ export class BuildSystem {
       new Vector3(0, 0, 0),
       new Vector3(0, 0, -3),
     ]);
-    const pointerMaterial = new LineBasicMaterial({ color: 0x70e8ff, depthTest: false, transparent: true, opacity: 0.8 });
-    this.pointerLine = new Line(pointerGeometry, pointerMaterial);
+    this.pointerLine = new Line(
+      pointerGeometry,
+      new LineBasicMaterial({
+        color: 0x70e8ff,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.8,
+      }),
+    );
     this.pointerLine.name = 'build-ui-pointer';
     this.pointerLine.visible = false;
     this.pointerLine.renderOrder = 1002;
@@ -198,9 +238,7 @@ export class BuildSystem {
     if (isLayoutFile(published)) this.publishedLayout = published;
     else console.warn('[build] invalid or missing published layout');
 
-    const local = this.readLocalLayout();
-    const layout = local ?? this.publishedLayout;
-    await this.loadLayout(layout);
+    await this.loadLayout(this.readLocalLayout() ?? this.publishedLayout);
     this.drawPanel();
   }
 
@@ -265,10 +303,10 @@ export class BuildSystem {
       root.position.fromArray(record.position);
       root.quaternion.fromArray(record.rotation);
       root.scale.fromArray(record.scale);
-      root.updateMatrixWorld(true);
       this.root.add(root);
+      root.updateMatrixWorld(true);
 
-      const runtime = { record, root };
+      const runtime: RuntimeObject = { record, root };
       this.objects.set(record.id, runtime);
       this.rootToId.set(root, record.id);
       return runtime;
@@ -329,13 +367,13 @@ export class BuildSystem {
     this.rightGripHeld = rightGrip;
 
     const selected = this.selectedRuntime();
-    if (selected) {
-      this.selectionBox.setFromObject(selected.root);
-      this.selectionBox.visible = true;
-      this.selectionBox.updateMatrixWorld(true);
-    } else {
+    if (!selected) {
       this.selectionBox.visible = false;
+      return;
     }
+    this.selectionBox.setFromObject(selected.root);
+    this.selectionBox.visible = true;
+    this.selectionBox.updateMatrixWorld(true);
   }
 
   private openPanel(): void {
@@ -378,15 +416,20 @@ export class BuildSystem {
     if (!hit?.uv) return;
     const x = hit.uv.x * PANEL_WIDTH_PX;
     const y = (1 - hit.uv.y) * PANEL_HEIGHT_PX;
-    const button = this.panelButtons.find((candidate) =>
-      x >= candidate.x && x <= candidate.x + candidate.w && y >= candidate.y && y <= candidate.y + candidate.h,
+    const button = this.panelButtons.find(
+      (candidate) =>
+        x >= candidate.x &&
+        x <= candidate.x + candidate.w &&
+        y >= candidate.y &&
+        y <= candidate.y + candidate.h,
     );
     if (button) this.runPanelAction(button.action);
   }
 
   private selectFromRightRay(): void {
     if (!this.rayFromHand('right')) return;
-    const hits = this.raycaster.intersectObjects([...this.objects.values()].map((runtime) => runtime.root), true);
+    const roots = [...this.objects.values()].map((runtime) => runtime.root);
+    const hits = this.raycaster.intersectObjects(roots, true);
     for (const hit of hits) {
       const runtime = this.runtimeForDescendant(hit.object);
       if (!runtime) continue;
@@ -450,30 +493,45 @@ export class BuildSystem {
   }
 
   private runPanelAction(action: string): void {
-    if (action === 'asset-prev') {
-      if (this.catalog.length > 0) this.assetIndex = (this.assetIndex - 1 + this.catalog.length) % this.catalog.length;
-      this.status = 'asset changed';
-      this.drawPanel();
-      return;
+    switch (action) {
+      case 'asset-prev':
+        if (this.catalog.length > 0) this.assetIndex = (this.assetIndex - 1 + this.catalog.length) % this.catalog.length;
+        this.status = 'asset changed';
+        this.drawPanel();
+        break;
+      case 'asset-next':
+        if (this.catalog.length > 0) this.assetIndex = (this.assetIndex + 1) % this.catalog.length;
+        this.status = 'asset changed';
+        this.drawPanel();
+        break;
+      case 'spawn':
+        void this.spawnSelectedAsset();
+        break;
+      case 'rotate-left':
+        this.rotateSelected(-15);
+        break;
+      case 'rotate-right':
+        this.rotateSelected(15);
+        break;
+      case 'scale-down':
+        this.scaleSelected(0.8);
+        break;
+      case 'scale-up':
+        this.scaleSelected(1.25);
+        break;
+      case 'duplicate':
+        void this.duplicateSelected();
+        break;
+      case 'delete':
+        this.deleteSelected();
+        break;
+      case 'copy':
+        void this.copyLayout();
+        break;
+      case 'reset':
+        void this.resetToPublished();
+        break;
     }
-    if (action === 'asset-next') {
-      if (this.catalog.length > 0) this.assetIndex = (this.assetIndex + 1) % this.catalog.length;
-      this.status = 'asset changed';
-      this.drawPanel();
-      return;
-    }
-    if (action === 'spawn') {
-      void this.spawnSelectedAsset();
-      return;
-    }
-    if (action === 'rotate-left') this.rotateSelected(-15);
-    if (action === 'rotate-right') this.rotateSelected(15);
-    if (action === 'scale-down') this.scaleSelected(0.8);
-    if (action === 'scale-up') this.scaleSelected(1.25);
-    if (action === 'duplicate') void this.duplicateSelected();
-    if (action === 'delete') this.deleteSelected();
-    if (action === 'copy') void this.copyLayout();
-    if (action === 'reset') void this.resetToPublished();
   }
 
   private async spawnSelectedAsset(): Promise<void> {
@@ -486,16 +544,16 @@ export class BuildSystem {
 
     this.status = `loading ${asset.label}`;
     this.drawPanel();
-
     _forward.set(0, 0, -1).applyQuaternion(_headQuat);
     if (_forward.lengthSq() < 0.001) _forward.set(0, 0, -1);
     _forward.normalize();
+
     const position = _head.clone().addScaledVector(_forward, asset.spawnDistance ?? 2.2);
     const uniformScale = asset.scale ?? 1;
     const record: PlacedObjectRecord = {
       id: newId(),
       assetId: asset.id,
-      position: position.toArray(),
+      position: vec3Tuple(position),
       rotation: [0, 0, 0, 1],
       scale: [uniformScale, uniformScale, uniformScale],
     };
@@ -545,8 +603,8 @@ export class BuildSystem {
       id: newId(),
       assetId: runtime.record.assetId,
       position: [runtime.record.position[0] + 0.6, runtime.record.position[1], runtime.record.position[2]],
-      rotation: [...runtime.record.rotation],
-      scale: [...runtime.record.scale],
+      rotation: copyQuat(runtime.record.rotation),
+      scale: copyVec3(runtime.record.scale),
     };
     const copy = await this.createRuntimeObject(record);
     if (!copy) return;
@@ -570,24 +628,24 @@ export class BuildSystem {
   }
 
   private syncRecord(runtime: RuntimeObject): void {
-    runtime.record.position = runtime.root.position.toArray();
-    runtime.record.rotation = runtime.root.quaternion.toArray();
-    runtime.record.scale = runtime.root.scale.toArray();
+    runtime.record.position = vec3Tuple(runtime.root.position);
+    runtime.record.rotation = quatTuple(runtime.root.quaternion);
+    runtime.record.scale = vec3Tuple(runtime.root.scale);
   }
 
   private currentLayout(): LayoutFile {
-    const records: PlacedObjectRecord[] = [];
+    const objects: PlacedObjectRecord[] = [];
     for (const runtime of this.objects.values()) {
       if (runtime.record.id !== this.grabbedId) this.syncRecord(runtime);
-      records.push({
+      objects.push({
         id: runtime.record.id,
         assetId: runtime.record.assetId,
-        position: [...runtime.record.position],
-        rotation: [...runtime.record.rotation],
-        scale: [...runtime.record.scale],
+        position: copyVec3(runtime.record.position),
+        rotation: copyQuat(runtime.record.rotation),
+        scale: copyVec3(runtime.record.scale),
       });
     }
-    return { version: 1, objects: records };
+    return { version: 1, objects };
   }
 
   private saveLocalLayout(): void {
@@ -619,7 +677,7 @@ export class BuildSystem {
     try {
       localStorage.removeItem(LOCAL_LAYOUT_KEY);
     } catch {
-      // Ignore restricted storage; published layout still reloads for this session.
+      // Published layout still reloads for this session if storage is restricted.
     }
     await this.loadLayout(this.publishedLayout);
     this.status = 'reset to GitHub layout';
@@ -642,14 +700,18 @@ export class BuildSystem {
     ctx.font = '22px monospace';
     ctx.fillStyle = '#83dbea';
     ctx.fillText('Hold LEFT trigger to keep this panel open', 34, 98);
-    ctx.fillText('RIGHT trigger: click / select   GRIP: move selection', 34, 132);
+    ctx.fillText('RIGHT trigger: click/select   GRIP: move selection', 34, 132);
 
     const asset = this.catalog[this.assetIndex];
     const selected = this.selectedRuntime();
     ctx.fillStyle = '#dff9ff';
     ctx.font = '26px monospace';
     ctx.fillText(`Asset: ${asset?.label ?? '(catalog empty)'}`, 34, 190);
-    ctx.fillText(`Selected: ${selected ? this.assetById(selected.record.assetId)?.label ?? selected.record.assetId : '(none)'}`, 34, 228);
+    ctx.fillText(
+      `Selected: ${selected ? this.assetById(selected.record.assetId)?.label ?? selected.record.assetId : '(none)'}`,
+      34,
+      228,
+    );
     ctx.font = '20px monospace';
     ctx.fillStyle = '#8fb8c1';
     ctx.fillText(`Objects: ${this.objects.size}   ${this.status}`, 34, 266);
@@ -660,29 +722,29 @@ export class BuildSystem {
     const full = PANEL_WIDTH_PX - left * 2;
     const third = (full - gap * 2) / 3;
     const half = (full - gap) / 2;
-    const h = 74;
+    const height = 74;
     let y = 310;
 
-    this.addPanelButton(ctx, '< ASSET', 'asset-prev', left, y, third, h);
-    this.addPanelButton(ctx, 'SPAWN', 'spawn', left + third + gap, y, third, h);
-    this.addPanelButton(ctx, 'ASSET >', 'asset-next', left + (third + gap) * 2, y, third, h);
-    y += h + gap;
+    this.addPanelButton(ctx, '< ASSET', 'asset-prev', left, y, third, height);
+    this.addPanelButton(ctx, 'SPAWN', 'spawn', left + third + gap, y, third, height);
+    this.addPanelButton(ctx, 'ASSET >', 'asset-next', left + (third + gap) * 2, y, third, height);
+    y += height + gap;
 
-    this.addPanelButton(ctx, 'ROT -15°', 'rotate-left', left, y, half, h);
-    this.addPanelButton(ctx, 'ROT +15°', 'rotate-right', left + half + gap, y, half, h);
-    y += h + gap;
+    this.addPanelButton(ctx, 'ROT -15°', 'rotate-left', left, y, half, height);
+    this.addPanelButton(ctx, 'ROT +15°', 'rotate-right', left + half + gap, y, half, height);
+    y += height + gap;
 
-    this.addPanelButton(ctx, 'SCALE -', 'scale-down', left, y, half, h);
-    this.addPanelButton(ctx, 'SCALE +', 'scale-up', left + half + gap, y, half, h);
-    y += h + gap;
+    this.addPanelButton(ctx, 'SCALE -', 'scale-down', left, y, half, height);
+    this.addPanelButton(ctx, 'SCALE +', 'scale-up', left + half + gap, y, half, height);
+    y += height + gap;
 
-    this.addPanelButton(ctx, 'DUPLICATE', 'duplicate', left, y, half, h);
-    this.addPanelButton(ctx, 'DELETE', 'delete', left + half + gap, y, half, h, true);
-    y += h + gap;
+    this.addPanelButton(ctx, 'DUPLICATE', 'duplicate', left, y, half, height);
+    this.addPanelButton(ctx, 'DELETE', 'delete', left + half + gap, y, half, height, true);
+    y += height + gap;
 
-    this.addPanelButton(ctx, 'COPY LAYOUT JSON', 'copy', left, y, full, h);
-    y += h + gap;
-    this.addPanelButton(ctx, 'RESET TO GITHUB LAYOUT', 'reset', left, y, full, h, true);
+    this.addPanelButton(ctx, 'COPY LAYOUT JSON', 'copy', left, y, full, height);
+    y += height + gap;
+    this.addPanelButton(ctx, 'RESET TO GITHUB LAYOUT', 'reset', left, y, full, height, true);
 
     ctx.font = '18px monospace';
     ctx.fillStyle = '#658993';
@@ -700,7 +762,7 @@ export class BuildSystem {
     h: number,
     danger = false,
   ): void {
-    this.panelButtons.push({ label, action, x, y, w, h });
+    this.panelButtons.push({ action, x, y, w, h });
     ctx.fillStyle = danger ? 'rgba(126, 42, 48, 0.72)' : 'rgba(25, 91, 106, 0.72)';
     ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = danger ? '#d77a80' : '#63d7ec';
@@ -720,13 +782,13 @@ export class BuildSystem {
     this.root.removeFromParent();
     this.selectionBox.removeFromParent();
     this.selectionBox.geometry.dispose();
-    (this.selectionBox.material as LineBasicMaterial).dispose();
+    this.selectionBox.material.dispose();
     this.panelRoot.removeFromParent();
     this.panelMesh.geometry.dispose();
     this.panelMesh.material.dispose();
     this.panelTexture.dispose();
     this.pointerLine.removeFromParent();
     this.pointerLine.geometry.dispose();
-    (this.pointerLine.material as LineBasicMaterial).dispose();
+    this.pointerLine.material.dispose();
   }
 }

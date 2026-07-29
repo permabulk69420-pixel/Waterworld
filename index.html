@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+    />
+    <title>Waterworld — VR Ocean Foundation</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #05141c;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: #cfe8f2;
+      }
+      canvas {
+        display: block;
+      }
+
+      /* --- Boot / loading screen --- */
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: radial-gradient(circle at 50% 40%, #0e3a4a, #05141c 70%);
+        z-index: 20;
+        transition: opacity 0.6s ease;
+      }
+      #boot.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #boot h1 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: 0.34em;
+        text-transform: uppercase;
+        font-weight: 500;
+        opacity: 0.85;
+      }
+      #boot-bar {
+        width: min(280px, 60vw);
+        height: 3px;
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      #boot-fill {
+        height: 100%;
+        width: 0%;
+        background: #6fd3e8;
+        transition: width 0.2s ease;
+      }
+      #boot-status {
+        font-size: 11px;
+        opacity: 0.5;
+        letter-spacing: 0.1em;
+      }
+
+      /* --- Debug HUD (desktop only; DOM is not visible inside immersive VR) --- */
+      #debug-hud {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        padding: 8px 10px;
+        font-size: 11px;
+        line-height: 1.55;
+        background: rgba(3, 16, 22, 0.62);
+        border: 1px solid rgba(120, 200, 220, 0.18);
+        border-radius: 5px;
+        white-space: pre;
+        pointer-events: none;
+        z-index: 10;
+        display: none;
+      }
+      #debug-hud.visible {
+        display: block;
+      }
+
+      /* --- Controls hint --- */
+      #hint {
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 11px;
+        opacity: 0.42;
+        text-align: center;
+        line-height: 1.6;
+        pointer-events: none;
+        z-index: 10;
+        transition: opacity 0.4s ease;
+      }
+      #hint.faded {
+        opacity: 0;
+      }
+
+      /* three.js VRButton */
+      #VRButton {
+        z-index: 15;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot">
+      <h1>Waterworld</h1>
+      <div id="boot-bar"><div id="boot-fill"></div></div>
+      <div id="boot-status">initialising</div>
+    </div>
+
+    <div id="debug-hud"></div>
+
+    <div id="hint">
+      click to look &nbsp;·&nbsp; WASD swim &nbsp;·&nbsp; Space / Ctrl up-down
+      &nbsp;·&nbsp; Shift boost &nbsp;·&nbsp; F3 debug &nbsp;·&nbsp; F4 chunk
+      bounds
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

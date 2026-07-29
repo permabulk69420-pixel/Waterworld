@@ -57,36 +57,41 @@
         opacity: 0.85;
       }
       #boot-settings {
-        width: min(360px, 82vw);
+        width: min(380px, 86vw);
         padding: 16px 18px 18px;
         border: 1px solid rgba(130, 215, 230, 0.18);
         border-radius: 8px;
         background: rgba(3, 20, 27, 0.46);
         backdrop-filter: blur(5px);
       }
+      .boot-setting {
+        margin-bottom: 16px;
+      }
+      .boot-setting:last-of-type {
+        margin-bottom: 14px;
+      }
       .boot-setting-header {
         display: flex;
         justify-content: space-between;
         align-items: baseline;
         gap: 16px;
-        margin-bottom: 11px;
+        margin-bottom: 7px;
         font-size: 11px;
         letter-spacing: 0.08em;
         text-transform: uppercase;
       }
-      #view-distance-value {
+      .boot-setting-value {
         opacity: 0.72;
         letter-spacing: 0;
         text-transform: none;
         white-space: nowrap;
       }
-      #view-distance {
+      .boot-slider {
         width: 100%;
-        margin: 4px 0 9px;
+        margin: 4px 0 7px;
         accent-color: #6fd3e8;
       }
       .boot-setting-note {
-        margin-bottom: 14px;
         font-size: 10px;
         line-height: 1.45;
         opacity: 0.48;
@@ -176,18 +181,43 @@
     <div id="boot">
       <h1>Waterworld</h1>
       <div id="boot-settings">
-        <div class="boot-setting-header">
-          <span>Load distance</span>
-          <span id="view-distance-value">3 chunks · ~192 m radius</span>
+        <div class="boot-setting">
+          <div class="boot-setting-header">
+            <span>Terrain load distance</span>
+            <span id="view-distance-value" class="boot-setting-value">3 chunks · ~192 m radius</span>
+          </div>
+          <input class="boot-slider" id="view-distance" type="range" min="2" max="8" step="1" value="3" />
+          <div class="boot-setting-note">
+            How far terrain chunks stay loaded. Terrain can remain much farther away than small vegetation.
+          </div>
         </div>
-        <input id="view-distance" type="range" min="2" max="8" step="1" value="3" />
-        <div class="boot-setting-note">
-          Higher values preload and retain more terrain. This setting is remembered for the next launch.
+
+        <div class="boot-setting">
+          <div class="boot-setting-header">
+            <span>Grass density</span>
+            <span id="grass-density-value" class="boot-setting-value">100%</span>
+          </div>
+          <input class="boot-slider" id="grass-density" type="range" min="0" max="400" step="10" value="100" />
+          <div class="boot-setting-note">
+            100% is the current test density. Try 0–400% to find the visual/performance sweet spot.
+          </div>
         </div>
+
+        <div class="boot-setting">
+          <div class="boot-setting-header">
+            <span>Grass render distance</span>
+            <span id="grass-distance-value" class="boot-setting-value">46 m</span>
+          </div>
+          <input class="boot-slider" id="grass-distance" type="range" min="10" max="100" step="2" value="46" />
+          <div class="boot-setting-note">
+            Grass meshes only exist near you; terrain still uses the separate load-distance setting above.
+          </div>
+        </div>
+
         <button id="boot-start" type="button">Generate world</button>
       </div>
       <div id="boot-bar" hidden><div id="boot-fill"></div></div>
-      <div id="boot-status">choose load distance</div>
+      <div id="boot-status">choose performance settings</div>
     </div>
 
     <div id="debug-hud"></div>

@@ -52,9 +52,8 @@ export const SAFE_SHALLOWS: BiomeConfig = {
     weights: { pinnacle: 1, arch: 1, sinkhole: 0.8, mound: 1 },
   },
 
-  // Instances per 100 m^2. The first vegetation value is intentionally modest:
-  // the test GLB is animated and fairly detailed, so we can judge the look before
-  // deciding how dense the final shallow grass fields should be.
+  // Instances per 100 m^2. The GPU-instanced seagrass renderer can multiply this
+  // heavily from the boot density control without cloning meshes/materials.
   spawnDensity: {
     vegetation: 0.12,
     rocks: 0,
@@ -73,9 +72,12 @@ export const SAFE_SHALLOWS: BiomeConfig = {
     terrainSlopeColor: 0x747a70,
     waterShallowColor: 0x3695a5,
     waterDeepColor: 0x082d3d,
-    // Clearer than the first technical pass so nearby terrain keeps contrast.
-    // Deeper biomes can become genuinely murky later.
-    fogDensityShallow: 0.0105,
-    fogDensityDeep: 0.029,
+
+    // Deliberately strong enough that terrain/content streaming disappears into
+    // blue-green haze before the player reaches the loaded-world edge. At shallow
+    // depth the scene is still readable for roughly tens of metres, while distant
+    // silhouettes are largely swallowed by ~100 m. Depth closes visibility further.
+    fogDensityShallow: 0.0145,
+    fogDensityDeep: 0.034,
   },
 };

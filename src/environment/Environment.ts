@@ -33,12 +33,12 @@ export class Environment {
 
   private readonly fog: FogExp2;
   private readonly dayAir = new Color(0xb9c9cd);
-  private readonly nightAir = new Color(0x020710);
-  private readonly nightWater = new Color(0x03131d);
+  private readonly nightAir = new Color(0x010309);
+  private readonly nightWater = new Color(0x01070c);
   private readonly dayZenith = new Color(0x5d86a4);
   private readonly dayHorizon = new Color(0xb9c9cd);
-  private readonly nightZenith = new Color(0x01040d);
-  private readonly nightHorizon = new Color(0x07101d);
+  private readonly nightZenith = new Color(0x000208);
+  private readonly nightHorizon = new Color(0x030811);
   private readonly duskHorizon = new Color(0xd07858);
   private readonly daySunColor = new Color(0xfff4e2);
   private readonly duskSunColor = new Color(0xff8b52);
@@ -116,10 +116,12 @@ export class Environment {
     const depthColorT = Math.pow(depthT, 1.45);
     const nightFactor = 1 - this.daylight;
 
+    // Night visibility now comes primarily from lack of light rather than extra haze.
+    // Push the water/background much darker, but keep silhouettes alive farther away.
     this.tmpColor.copy(this.shallowWater);
     this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24 * this.daylight);
     this.tmpColor.lerp(this.deepWater, depthColorT);
-    this.tmpColor.lerp(this.nightWater, nightFactor * (0.78 + depthT * 0.12));
+    this.tmpColor.lerp(this.nightWater, nightFactor * (0.9 + depthT * 0.06));
     this.tmpColor.lerp(this.tmpAir, 1 - this.submergence);
     this.fog.color.copy(this.tmpColor);
     if (this.scene.background instanceof Color) this.scene.background.copy(this.tmpColor);
@@ -127,7 +129,9 @@ export class Environment {
     const waterDensity =
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
-    const nightDensity = waterDensity * (1 + 0.16 * nightFactor);
+    // Full night is ~20% less fog-dense than daytime. Darkness, not soup, should be
+    // the main visibility barrier so torch/headlights reveal real distant geometry.
+    const nightDensity = waterDensity * (1 - 0.2 * nightFactor);
     this.fog.density = 0.0016 + (nightDensity - 0.0016) * this.submergence;
 
     this.lighting.update(
@@ -140,7 +144,7 @@ export class Environment {
     );
     this.lighting.follow(cameraPosition);
 
-    this.sky.setExposure((0.18 + 0.82 * this.currentTwilight()) * (1 - 0.5 * this.submergence));
+    this.sky.setExposure((0.08 + 0.92 * this.currentTwilight()) * (1 - 0.5 * this.submergence));
     this.sky.setFogBlend(this.tmpColor, this.submergence);
     this.sky.followCamera(cameraPosition);
 
@@ -182,8 +186,8 @@ export class Environment {
     this.sky.setSunDirection(this.lighting.sunDirection);
     this.sky.setPalette(this.tmpZenith, this.tmpHorizon, this.tmpSun);
 
-    this.tmpOceanSurface.copy(this.shallowWater).lerp(this.nightWater, (1 - twilight) * 0.82);
-    this.tmpOceanDeep.copy(this.deepWater).lerp(this.nightWater, (1 - twilight) * 0.9);
+    this.tmpOceanSurface.copy(this.shallowWater).lerp(this.nightWater, (1 - twilight) * 0.92);
+    this.tmpOceanDeep.copy(this.deepWater).lerp(this.nightWater, (1 - twilight) * 0.96);
     this.ocean.setColors(this.tmpOceanSurface, this.tmpOceanDeep, this.tmpHorizon);
     this.ocean.setSunDirection(this.lighting.sunDirection);
     this.ocean.setSunColor(this.tmpSun);

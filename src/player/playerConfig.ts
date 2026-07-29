@@ -7,6 +7,8 @@ export interface PlayerConfig {
 
   /** Top swimming speed, m/s. */
   swimSpeed: number;
+  /** Horizontal walking speed when the player is out of the water, m/s. */
+  walkSpeed: number;
   /** Multiplier while boost is held. */
   boostMultiplier: number;
   /** Vertical (ascend/descend) speed, m/s. */
@@ -16,8 +18,17 @@ export interface PlayerConfig {
   acceleration: number;
   /** How fast velocity bleeds off when the stick is released, per second. */
   deceleration: number;
-  /** Passive drag applied always, per second - stops endless coasting. */
+  /** Passive drag applied while swimming, per second - stops endless coasting. */
   drag: number;
+
+  /** Maximum height the player's eyes may sit above the local wave while swimming. */
+  surfaceEyeClearance: number;
+  /** Height above the local wave that counts as having climbed onto dry ground. */
+  surfaceExitClearance: number;
+  /** Above-water gravity, m/s^2. */
+  gravity: number;
+  /** Maximum downward speed when falling through air, m/s. */
+  terminalFallSpeed: number;
 
   /** Smooth turn rate, degrees per second. */
   turnSpeedDegrees: number;
@@ -47,12 +58,21 @@ export const DEFAULT_PLAYER_CONFIG: PlayerConfig = {
   // Conservative first-pass VR speeds. It is much easier to increase these once
   // the controls feel right than to diagnose input while flying through the map.
   swimSpeed: 2.35,
+  walkSpeed: 2.15,
   boostMultiplier: 1.5,
   verticalSpeed: 1.8,
 
   acceleration: 4.8,
   deceleration: 4.5,
   drag: 0.5,
+
+  // At the surface the player remains a swimmer, with their eyes just above the
+  // local animated wave. Once terrain physically lifts them well clear of the
+  // water they transition to ordinary gravity instead of continuing to fly.
+  surfaceEyeClearance: 0.12,
+  surfaceExitClearance: 0.62,
+  gravity: 9.81,
+  terminalFallSpeed: 18,
 
   turnSpeedDegrees: 58,
   turnSmoothing: 14,

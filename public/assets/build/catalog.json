@@ -5,5 +5,13 @@
     "url": "./assets/player/motors/handheld_underwater_thruster.glb",
     "scale": 1,
     "spawnDistance": 1.4
+  },
+  {
+    "id": "crashed-research-ship",
+    "label": "Crashed Research Ship",
+    "url": "./assets/build/ships/crashed_research_ship.glb",
+    "scale": 1,
+    "spawnDistance": 24,
+    "spawnY": 0
   }
 ]

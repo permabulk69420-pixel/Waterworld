@@ -51,56 +51,38 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  // First biome dressing pass. Register before terrain preload so every chunk is
-  // populated the first time it streams in rather than requiring a reload cycle.
+  // First biome dressing pass. The system records deterministic placements for
+  // loaded chunks, but only creates actual grass meshes close to the player.
   const seaGrass = new SeaGrassSystem();
   game.content.register(seaGrass);
   settings.setStatus('loading shallow vegetation');
   await seaGrass.ready;
 
   // Reuse the apartment project's rigged hands. VRHands creates the tracked
-  // controller/grip nodes under Waterworld's existing player rig, so the world
-  // locomotion code remains untouched.
+  // controller/grip nodes under Waterworld's existing player rig.
   const hands = new VRHands(game.renderer, game.rig.group);
-  let xrLastFrameMs = 0;
+  let handLastFrameMs = 0;
 
-  const updateXrSystems = (timeMs: number): void => {
+  const updateHands = (timeMs: number): void => {
     const session = game.renderer.xr.getSession();
     if (!session) {
-      xrLastFrameMs = 0;
+      handLastFrameMs = 0;
       return;
     }
 
-    const dt = xrLastFrameMs === 0 ? 0 : Math.min((timeMs - xrLastFrameMs) / 1000, 0.05);
-    xrLastFrameMs = timeMs;
+    const dt = handLastFrameMs === 0 ? 0 : Math.min((timeMs - handLastFrameMs) / 1000, 0.05);
+    handLastFrameMs = timeMs;
     hands.update(dt);
-    seaGrass.update(dt);
-    session.requestAnimationFrame(updateXrSystems);
+    session.requestAnimationFrame(updateHands);
   };
 
   game.renderer.xr.addEventListener('sessionstart', () => {
-    xrLastFrameMs = 0;
-    game.renderer.xr.getSession()?.requestAnimationFrame(updateXrSystems);
+    handLastFrameMs = 0;
+    game.renderer.xr.getSession()?.requestAnimationFrame(updateHands);
   });
   game.renderer.xr.addEventListener('sessionend', () => {
-    xrLastFrameMs = 0;
+    handLastFrameMs = 0;
   });
-
-  // Keep the same grass animation visible in the normal browser preview. While
-  // WebXR is presenting the XR frame loop above owns vegetation updates instead.
-  let desktopVegetationLastMs = 0;
-  const updateDesktopVegetation = (timeMs: number): void => {
-    if (!game.renderer.xr.isPresenting) {
-      const dt = desktopVegetationLastMs === 0
-        ? 0
-        : Math.min((timeMs - desktopVegetationLastMs) / 1000, 0.05);
-      desktopVegetationLastMs = timeMs;
-      seaGrass.update(dt);
-    } else {
-      desktopVegetationLastMs = 0;
-    }
-    requestAnimationFrame(updateDesktopVegetation);
-  };
 
   // Handy for poking at the world from the browser console.
   (window as unknown as { game: Game }).game = game;
@@ -109,7 +91,6 @@ async function bootstrap(): Promise<void> {
     bootFill.style.width = `${Math.round(progress * 100)}%`;
     settings.setStatus(label);
   });
-  requestAnimationFrame(updateDesktopVegetation);
 
   boot.classList.add('hidden');
   setTimeout(() => boot.remove(), 800);

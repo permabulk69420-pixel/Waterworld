@@ -44,19 +44,21 @@ export const DEFAULT_PLAYER_CONFIG: PlayerConfig = {
   bodyHeight: 1.75,
   bodyRadius: 0.32,
 
-  swimSpeed: 4.2,
-  boostMultiplier: 1.9,
-  verticalSpeed: 3.0,
+  // Conservative first-pass VR speeds. It is much easier to increase these once
+  // the controls feel right than to diagnose input while flying through the map.
+  swimSpeed: 2.35,
+  boostMultiplier: 1.5,
+  verticalSpeed: 1.8,
 
-  acceleration: 3.6,
-  deceleration: 2.6,
-  drag: 0.35,
+  acceleration: 4.8,
+  deceleration: 4.5,
+  drag: 0.5,
 
-  turnSpeedDegrees: 65,
-  turnSmoothing: 12,
+  turnSpeedDegrees: 58,
+  turnSmoothing: 14,
 
-  moveDeadzone: 0.16,
-  turnDeadzone: 0.22,
+  moveDeadzone: 0.2,
+  turnDeadzone: 0.24,
 
   headRelativeVertical: true,
 

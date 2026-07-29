@@ -1,4 +1,4 @@
-import { Camera, Group, PerspectiveCamera, Quaternion, Vector3, type WebGLRenderer } from 'three';
+import { Group, PerspectiveCamera, Quaternion, Vector3, type WebGLRenderer } from 'three';
 
 const _q = new Quaternion();
 const _v = new Vector3();
@@ -9,10 +9,10 @@ const WORLD_UP = new Vector3(0, 1, 0);
  * The player rig.
  *
  * `group` is the thing locomotion moves; the camera lives inside it. In an XR
- * session three.js overwrites the camera's transform with the headset pose
- * every frame, so the rig never touches the camera's local transform - and the
- * player's view orientation is never forced, which is both a comfort
- * requirement and a WebXR one.
+ * session three.js writes the tracked headset transform into the user camera's
+ * matrixWorld. Do not use Object3D.getWorldPosition/getWorldQuaternion while XR
+ * is presenting: those helpers may recompute the camera matrix from the normal
+ * scene graph and lose the tracked XR pose. Read matrixWorld directly instead.
  */
 export class PlayerRig {
   readonly group = new Group();
@@ -27,19 +27,24 @@ export class PlayerRig {
     this.group.add(camera);
   }
 
-  /** The camera three is actually rendering with (an ArrayCamera in XR). */
-  private activeCamera(): Camera {
-    return this.renderer.xr.isPresenting ? this.renderer.xr.getCamera() : this.camera;
-  }
-
-  /** World-space position of the player's eyes. */
+  /**
+   * World-space position of the player's eyes.
+   *
+   * While presenting, WebXRManager has already composed the tracked HMD pose
+   * with the application's camera/rig transform into camera.matrixWorld. Reading
+   * the matrix directly is important: getWorldPosition() can recalculate it from
+   * the ordinary Object3D hierarchy and effectively turn a local XR pose into a
+   * bogus world-space pivot.
+   */
   getHeadPosition(target: Vector3): Vector3 {
-    return this.activeCamera().getWorldPosition(target);
+    if (!this.renderer.xr.isPresenting) this.camera.updateWorldMatrix(true, false);
+    return target.setFromMatrixPosition(this.camera.matrixWorld);
   }
 
   /** World-space orientation of the player's head. */
   getHeadQuaternion(target: Quaternion): Quaternion {
-    return this.activeCamera().getWorldQuaternion(target);
+    if (!this.renderer.xr.isPresenting) this.camera.updateWorldMatrix(true, false);
+    return target.setFromRotationMatrix(this.camera.matrixWorld);
   }
 
   /** Unit vector the player is looking along. */
@@ -78,10 +83,9 @@ export class PlayerRig {
   }
 
   /**
-   * Yaws the rig about the vertical axis running through the player's *current
-   * head position*. Rotating about the rig origin instead would swing the
-   * player through an arc whenever they are standing away from rig centre,
-   * which is a classic source of VR nausea.
+   * Yaws the rig about the vertical axis running through the player's current
+   * head position. Using the real tracked matrixWorld position keeps smooth
+   * turning in-place instead of orbiting the rig around the XR reference origin.
    */
   rotateAroundHead(angleRadians: number): void {
     if (angleRadians === 0) return;
@@ -89,7 +93,8 @@ export class PlayerRig {
     this.getHeadPosition(_v);
     _q.setFromAxisAngle(WORLD_UP, angleRadians);
 
-    // Orbit the rig origin about the head, then apply the same yaw to the rig.
+    // Orbit the rig origin about the *actual world-space HMD position*, then
+    // apply the same yaw to the rig. This keeps the eyes fixed while turning.
     _offset.subVectors(this.group.position, _v).applyQuaternion(_q);
     this.group.position.copy(_v).add(_offset);
     this.group.quaternion.premultiply(_q);

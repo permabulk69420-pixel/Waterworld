@@ -20,7 +20,7 @@ const HAND_URLS = Object.freeze({
   right: 'https://raw.githubusercontent.com/permabulk69420-pixel/dumbgame/main/assets/models/hands/RightHand.glb',
 });
 
-type Handedness = keyof typeof HAND_URLS;
+export type Handedness = keyof typeof HAND_URLS;
 
 interface InputSourceLike {
   handedness?: string;
@@ -283,6 +283,12 @@ export class VRHands {
 
   get objectGrips(): readonly Group[] {
     return this.states.map((state) => state.objectGrip);
+  }
+
+  /** Returns the palm-held-object anchor for a currently connected left/right controller. */
+  getObjectGrip(handedness: Handedness): Group | null {
+    const state = this.states.find((item) => item.handedness === handedness);
+    return state?.objectGrip ?? null;
   }
 
   getIndexTipWorldPosition(handedness: Handedness, target: Vector3): boolean {

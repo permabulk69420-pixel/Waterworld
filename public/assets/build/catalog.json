@@ -1,0 +1,9 @@
+[
+  {
+    "id": "hand-thruster-test",
+    "label": "Hand Thruster (test)",
+    "url": "./assets/player/motors/handheld_underwater_thruster.glb",
+    "scale": 1,
+    "spawnDistance": 1.4
+  }
+]

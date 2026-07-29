@@ -13,14 +13,7 @@ import {
 const UP = new Vector3(0, 1, 0);
 const WHITE_WATER = new Color(0xd8fff0);
 
-/**
- * Cheap fake volumetric sunlight for standalone VR.
- *
- * Five shafts are batched into one geometry / one draw call. Each shaft is two crossed
- * translucent quads, so it still reads when viewed from different angles without doing an
- * expensive volumetric raymarch. The whole cluster follows the player horizontally, like a
- * sky effect, while slow shader motion prevents that camera-relative trick from being obvious.
- */
+/** Cheap fake volumetric sunlight for standalone VR. */
 export class LightShafts {
   readonly root = new Group();
   private readonly material: ShaderMaterial;
@@ -33,7 +26,6 @@ export class LightShafts {
     sunDirection: Vector3,
   ) {
     this.root.name = 'underwater-sun-shafts';
-    // Geometry runs downward along local -Y; align local +Y toward the sun.
     this.root.quaternion.setFromUnitVectors(UP, sunDirection.clone().normalize());
 
     this.material = new ShaderMaterial({
@@ -50,7 +42,6 @@ export class LightShafts {
       vertexShader: /* glsl */ `
         varying vec2 vUv;
         varying vec3 vLocal;
-
         void main() {
           vUv = uv;
           vLocal = position;
@@ -67,14 +58,9 @@ export class LightShafts {
         void main() {
           float edge = sin(clamp(vUv.x, 0.0, 1.0) * 3.14159265);
           edge *= edge;
-
-          // Fade just under the surface and well before the bottom of the geometry.
           float along = smoothstep(0.02, 0.16, vUv.y) * (1.0 - smoothstep(0.66, 1.0, vUv.y));
-
-          // Two slow motions keep the shafts alive without texture lookups.
           float shimmer = 0.72 + 0.28 * sin(vLocal.y * 0.105 + vLocal.x * 0.14 + uTime * 0.83);
           shimmer *= 0.82 + 0.18 * sin(vLocal.z * 0.19 - vLocal.y * 0.051 - uTime * 0.57);
-
           float alpha = uStrength * edge * along * shimmer;
           if (alpha < 0.002) discard;
           gl_FragColor = vec4(uColor * alpha, alpha);
@@ -96,18 +82,18 @@ export class LightShafts {
     submergence: number,
     depth: number,
     shallowWater: Color,
+    sunDirection: Vector3,
+    daylight = 1,
   ): void {
     this.timeUniform.value = elapsed;
+    this.root.quaternion.setFromUnitVectors(UP, sunDirection);
 
-    // Strongest in the bright top 10-20 m, with a long fade for clear open water.
     const depthFade = 1 - smoothstep(18, 72, depth);
-    const strength = submergence * depthFade * 0.19;
+    const strength = submergence * depthFade * 0.19 * daylight;
     this.strengthUniform.value = strength;
     this.root.visible = strength > 0.004;
     if (!this.root.visible) return;
 
-    // Follow the player so a small amount of geometry can imply a huge sunlit volume.
-    // The tiny drift keeps the illusion from feeling locked to the headset.
     this.root.position.set(
       cameraPosition.x + Math.sin(elapsed * 0.08) * 3.5,
       this.seaLevel + 0.35,
@@ -123,7 +109,6 @@ export class LightShafts {
   }
 }
 
-/** One non-indexed geometry containing five crossed tapered shafts. */
 function createShaftGeometry(): BufferGeometry {
   const specs = [
     [-13, -7, 5.8, 64],
@@ -135,7 +120,6 @@ function createShaftGeometry(): BufferGeometry {
 
   const positions: number[] = [];
   const uvs: number[] = [];
-
   for (const [ox, oz, width, height] of specs) {
     appendQuad(positions, uvs, ox, oz, width, height, false);
     appendQuad(positions, uvs, ox, oz, width * 0.86, height, true);
@@ -173,7 +157,6 @@ function appendQuad(
   const b = point(1, false);
   const c = point(1, true);
   const d = point(-1, true);
-
   pushTri(positions, uvs, a, b, c, [0, 0], [1, 0], [1, 1]);
   pushTri(positions, uvs, a, c, d, [0, 0], [1, 1], [0, 1]);
 }

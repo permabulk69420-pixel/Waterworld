@@ -14,15 +14,16 @@ import type { ChunkContentContext, ContentPopulator } from './ContentRegistry.ts
 const UP = new Vector3(0, 1, 0);
 const ASSET_URL = './assets/biomes/safe-shallows/tropical_seagrass_lush_animated.glb';
 
-// Terrain can stay visible much farther away than small vegetation. Only create
-// expensive GLB clones near the player, stop drawing them before they become
-// unreadable through the water, and only animate the closest ones.
-const RENDER_DISTANCE = 46;
-const UNLOAD_DISTANCE = 62;
-const ANIMATION_DISTANCE = 26;
-const RENDER_DISTANCE_SQ = RENDER_DISTANCE * RENDER_DISTANCE;
-const UNLOAD_DISTANCE_SQ = UNLOAD_DISTANCE * UNLOAD_DISTANCE;
-const ANIMATION_DISTANCE_SQ = ANIMATION_DISTANCE * ANIMATION_DISTANCE;
+const DEFAULT_RENDER_DISTANCE = 46;
+const MIN_RENDER_DISTANCE = 10;
+const MAX_RENDER_DISTANCE = 100;
+
+export interface SeaGrassOptions {
+  /** Multiplies the biome's base vegetation density. 1 = current authored density. */
+  densityMultiplier?: number;
+  /** Distance in metres at which grass is visible/created. */
+  renderDistance?: number;
+}
 
 interface ActivePatch {
   object: Object3D;
@@ -60,14 +61,35 @@ export class SeaGrassSystem implements ContentPopulator {
   private template: Object3D | null = null;
   private swayClip: AnimationClip | null = null;
   private readonly chunks = new Map<string, ChunkGrassState>();
+  private readonly densityMultiplier: number;
+  private readonly renderDistanceSq: number;
+  private readonly unloadDistanceSq: number;
+  private readonly animationDistanceSq: number;
   private loadFailed = false;
 
-  constructor() {
+  constructor(options: SeaGrassOptions = {}) {
+    this.densityMultiplier = MathUtils.clamp(options.densityMultiplier ?? 1, 0, 4);
+
+    const renderDistance = MathUtils.clamp(
+      options.renderDistance ?? DEFAULT_RENDER_DISTANCE,
+      MIN_RENDER_DISTANCE,
+      MAX_RENDER_DISTANCE,
+    );
+    const unloadDistance = renderDistance + Math.max(10, renderDistance * 0.35);
+    const animationDistance = Math.min(26, renderDistance * 0.6);
+
+    this.renderDistanceSq = renderDistance * renderDistance;
+    this.unloadDistanceSq = unloadDistance * unloadDistance;
+    this.animationDistanceSq = animationDistance * animationDistance;
     this.ready = this.load();
   }
 
   appliesTo(biome: BiomeConfig): boolean {
-    return biome.id === 'SAFE_SHALLOWS' && biome.spawnDensity.vegetation > 0;
+    return (
+      this.densityMultiplier > 0 &&
+      biome.id === 'SAFE_SHALLOWS' &&
+      biome.spawnDensity.vegetation > 0
+    );
   }
 
   private async load(): Promise<void> {
@@ -94,7 +116,7 @@ export class SeaGrassSystem implements ContentPopulator {
   populate(ctx: ChunkContentContext): void {
     if (!this.template || this.loadFailed) return;
 
-    const density = ctx.biome.spawnDensity.vegetation;
+    const density = ctx.biome.spawnDensity.vegetation * this.densityMultiplier;
     const chunkWidth = ctx.bounds.max.x - ctx.bounds.min.x;
     const chunkDepth = ctx.bounds.max.z - ctx.bounds.min.z;
     const targetCount = Math.max(0, Math.round((chunkWidth * chunkDepth * density) / 100));
@@ -138,13 +160,13 @@ export class SeaGrassSystem implements ContentPopulator {
         const distanceSq = dx * dx + dz * dz;
 
         if (!placement.active) {
-          if (distanceSq <= RENDER_DISTANCE_SQ) {
+          if (distanceSq <= this.renderDistanceSq) {
             placement.active = this.createPatch(chunk.group, placement);
           }
           continue;
         }
 
-        if (distanceSq > UNLOAD_DISTANCE_SQ) {
+        if (distanceSq > this.unloadDistanceSq) {
           this.destroyPatch(placement.active);
           placement.active = null;
           continue;
@@ -152,11 +174,11 @@ export class SeaGrassSystem implements ContentPopulator {
 
         // Hysteresis keeps a patch alive a little beyond the creation distance so
         // swimming around the cutoff does not repeatedly allocate/free GLB clones.
-        placement.active.object.visible = distanceSq <= RENDER_DISTANCE_SQ;
+        placement.active.object.visible = distanceSq <= this.renderDistanceSq;
 
-        // Morph animation is relatively CPU-heavy. At this distance the sway is
-        // visually negligible anyway, so only update the nearest patches.
-        if (placement.active.mixer && distanceSq <= ANIMATION_DISTANCE_SQ) {
+        // Morph animation is relatively CPU-heavy. Scale the animation radius down
+        // with the render setting and never animate beyond 26 m.
+        if (placement.active.mixer && distanceSq <= this.animationDistanceSq) {
           placement.active.mixer.update(safeDt);
         }
       }
@@ -173,8 +195,8 @@ export class SeaGrassSystem implements ContentPopulator {
     patch.scale.setScalar(placement.scale);
 
     // The current generic chunk disposer assumes content owns its GPU resources.
-    // Clone them only for nearby active patches; distant chunks now hold placement
-    // records instead of hundreds of invisible copies.
+    // Clone them only for nearby active patches; distant chunks hold placement
+    // records instead of invisible GLB copies.
     patch.traverse((object) => {
       const mesh = object as Mesh;
       if (!mesh.isMesh) return;

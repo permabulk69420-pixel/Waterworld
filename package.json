@@ -1,0 +1,27 @@
+{
+  "name": "waterworld",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "WebXR alien-ocean survival prototype - technical foundation",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc --noEmit",
+    "verify": "tsx scripts/verify-world.ts",
+    "smoke": "node scripts/smoke-browser.mjs",
+    "check": "npm run typecheck && npm run verify && npm run build && npm run smoke"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "@types/three": "^0.185.0",
+    "playwright": "^1.62.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

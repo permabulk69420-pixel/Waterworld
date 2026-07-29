@@ -64,6 +64,37 @@
         background: rgba(3, 20, 27, 0.46);
         backdrop-filter: blur(5px);
       }
+      .mode-selector {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+      .mode-button {
+        min-height: 44px;
+        border: 1px solid rgba(111, 211, 232, 0.24);
+        border-radius: 6px;
+        background: rgba(20, 62, 74, 0.28);
+        color: rgba(217, 246, 251, 0.68);
+        font: inherit;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      .mode-button.active {
+        border-color: rgba(111, 211, 232, 0.72);
+        background: rgba(36, 130, 150, 0.34);
+        color: #e4fbff;
+        box-shadow: inset 0 0 18px rgba(84, 205, 229, 0.08);
+      }
+      .mode-note {
+        grid-column: 1 / -1;
+        margin-top: 2px;
+        font-size: 10px;
+        line-height: 1.4;
+        opacity: 0.46;
+      }
       .boot-setting {
         margin-bottom: 16px;
       }
@@ -110,7 +141,9 @@
         cursor: pointer;
       }
       #boot-start:hover,
-      #boot-start:focus-visible {
+      #boot-start:focus-visible,
+      .mode-button:hover,
+      .mode-button:focus-visible {
         background: rgba(54, 158, 180, 0.34);
         outline: none;
       }
@@ -181,6 +214,14 @@
     <div id="boot">
       <h1>Waterworld</h1>
       <div id="boot-settings">
+        <div class="mode-selector">
+          <button id="mode-story" class="mode-button active" type="button">Story</button>
+          <button id="mode-build" class="mode-button" type="button">Build</button>
+          <div class="mode-note">
+            Story runs the game. Build loads the same world with the in-VR authored-object editor enabled.
+          </div>
+        </div>
+
         <div class="boot-setting">
           <div class="boot-setting-header">
             <span>Terrain load distance</span>
@@ -214,7 +255,7 @@
           </div>
         </div>
 
-        <button id="boot-start" type="button">Generate world</button>
+        <button id="boot-start" type="button">Enter story mode</button>
       </div>
       <div id="boot-bar" hidden><div id="boot-fill"></div></div>
       <div id="boot-status">choose performance settings</div>

@@ -52,9 +52,11 @@ export const SAFE_SHALLOWS: BiomeConfig = {
     weights: { pinnacle: 1, arch: 1, sinkhole: 0.8, mound: 1 },
   },
 
-  // Hooks only - no content is spawned in this pass.
+  // Instances per 100 m^2. The first vegetation value is intentionally modest:
+  // the test GLB is animated and fairly detailed, so we can judge the look before
+  // deciding how dense the final shallow grass fields should be.
   spawnDensity: {
-    vegetation: 0,
+    vegetation: 0.12,
     rocks: 0,
     resources: 0,
     creatures: 0,

@@ -3,10 +3,12 @@ import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
 import { HandThrusters } from './player/HandThrusters.ts';
+import { RearLedgeClimb } from './player/RearLedgeClimb.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
+import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V2-SHIP';
+const BUILD_TAG = 'BUILD-MODE-V3-OPEN-REAR-SHIP';
 
 /**
  * Bootstrap.
@@ -83,7 +85,21 @@ async function bootstrap(): Promise<void> {
   await authoredWorld.ready;
 
   let thrusters: HandThrusters | null = null;
+  let rearClimb: RearLedgeClimb | null = null;
   if (mode === 'story') {
+    // The ship GLB carries simple COLLIDER_* geometry for its accessible rear
+    // section. Install it only in Story mode so Build-mode object movement never
+    // leaves stale static collision behind.
+    installShipCollision(game.scene, game.collision);
+
+    rearClimb = new RearLedgeClimb(
+      game.scene,
+      game.renderer,
+      game.rig,
+      hands,
+      game.locomotion,
+    );
+
     thrusters = new HandThrusters(
       game.renderer,
       hands,
@@ -102,6 +118,9 @@ async function bootstrap(): Promise<void> {
   game.addFrameListener((dt) => {
     hands.update(dt);
     thrusters?.update(dt);
+    // Run after the motors so an anchored hand can cancel propulsion for the
+    // current frame while the player physically pulls against the rear ledge.
+    rearClimb?.update();
     authoredWorld.update();
   });
 
@@ -115,6 +134,8 @@ async function bootstrap(): Promise<void> {
 
   if (mode === 'build') {
     hint.textContent = 'BUILD · left trigger menu · right trigger select/click · grip moves selection · A/X up · B/Y down';
+  } else {
+    hint.textContent = 'STORY · rear ship ledge: squeeze grip and physically pull yourself up';
   }
 
   boot.classList.add('hidden');

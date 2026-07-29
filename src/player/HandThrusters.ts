@@ -22,8 +22,13 @@ const PICKUP_RADIUS = 0.45;
 const PICKUP_RADIUS_SQ = PICKUP_RADIUS * PICKUP_RADIUS;
 const GRAB_THRESHOLD = 0.55;
 const XR_SPAWN_DELAY_FRAMES = 4;
-const PROPELLER_MAX_RAD_PER_SECOND = Math.PI * 2 * 18;
-const PROPELLER_RESPONSE = 14;
+
+// Do not use a prop speed that phase-locks to common Quest refresh rates. The old
+// 18 rev/s advances almost exactly 90 degrees per frame at 72 Hz; a symmetric
+// propeller therefore looks frozen except during throttle transitions. 7.3 rev/s
+// gives a clearly moving blade pattern at 72/80/90/120 Hz while still reading fast.
+const PROPELLER_MAX_RAD_PER_SECOND = Math.PI * 2 * 7.3;
+const PROPELLER_RESPONSE = 18;
 
 // GripPoint in the motor GLB is the point that belongs in the palm. The Quest raw
 // controller grip is closer to the wrist, so held motors parent to VRHands.objectGrip,
@@ -209,9 +214,12 @@ export class HandThrusters {
       motor.propellerSpeed += (targetSpeed - motor.propellerSpeed) * blend;
       if (Math.abs(motor.propellerSpeed) < 0.01) motor.propellerSpeed = 0;
 
-      // The uploaded propeller sits in the XY plane at the rear of the motor, so its
-      // shaft axis is local Z. Spin that node directly rather than animating the body.
-      if (motor.propeller) motor.propeller.rotation.z += motor.propellerSpeed * dt;
+      // Accumulate rotation every XR frame. The deliberately non-refresh-locked
+      // speed avoids the 90-degree-per-frame strobe that made full throttle appear stuck.
+      if (motor.propeller) {
+        motor.propeller.rotation.z =
+          (motor.propeller.rotation.z + motor.propellerSpeed * dt) % (Math.PI * 2);
+      }
     }
   }
 

@@ -1,16 +1,16 @@
 # Build ships
 
-Upload the crashed research ship exterior GLB here with the exact filename:
+Current crashed research ship exterior GLB:
 
-`crashed_research_ship.glb`
+`crashed_interplanetary_research_spacecraft.glb`
 
-Matching modular interior GLB filename:
+Matching modular interior GLB filename when we add it:
 
-`crashed_research_ship_interior.glb`
+`crashed_interplanetary_research_spacecraft_interior.glb`
 
 Build mode exterior catalog path:
 
-`./assets/build/ships/crashed_research_ship.glb`
+`./assets/build/ships/crashed_interplanetary_research_spacecraft.glb`
 
 The exterior and interior should use the same real-world scale, Y-up orientation, local -Z forward direction, and ship-space alignment so the interior drops into the exterior without manual offsets.
 

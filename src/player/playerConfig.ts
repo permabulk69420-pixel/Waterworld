@@ -21,6 +21,11 @@ export interface PlayerConfig {
   /** Passive drag applied while swimming, per second - stops endless coasting. */
   drag: number;
 
+  /** Acceleration contributed by one handheld motor at full trigger, m/s^2. */
+  propulsionAcceleration: number;
+  /** Safety cap for combined stick + handheld-motor swimming speed, m/s. */
+  propulsionMaxSpeed: number;
+
   /** Maximum height the player's eyes may sit above the local wave while swimming. */
   surfaceEyeClearance: number;
   /** Height above the local wave that counts as having climbed onto dry ground. */
@@ -65,6 +70,11 @@ export const DEFAULT_PLAYER_CONFIG: PlayerConfig = {
   acceleration: 4.8,
   deceleration: 4.5,
   drag: 0.5,
+
+  // Each trigger drives one physical hand direction. Two aligned motors therefore
+  // accelerate roughly twice as hard, but the velocity cap keeps testing sane.
+  propulsionAcceleration: 12,
+  propulsionMaxSpeed: 7.5,
 
   // At the surface the player remains a swimmer, with their eyes just above the
   // local animated wave. Once terrain physically lifts them well clear of the

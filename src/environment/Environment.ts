@@ -116,8 +116,6 @@ export class Environment {
     const depthColorT = Math.pow(depthT, 1.45);
     const nightFactor = 1 - this.daylight;
 
-    // Underwater daylight now genuinely disappears at night. Near-surface green lift
-    // only exists while the sun is useful; darkness then trends to a deep blue-black.
     this.tmpColor.copy(this.shallowWater);
     this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24 * this.daylight);
     this.tmpColor.lerp(this.deepWater, depthColorT);
@@ -164,8 +162,6 @@ export class Environment {
     const solarAngle = (this.timeOfDay - 0.25) * Math.PI * 2;
     const rawAltitude = Math.sin(solarAngle);
 
-    // The sun travels east-west with a slight fixed Z component so the light is never
-    // perfectly aligned with a world axis. Negative Y naturally puts it below horizon.
     this.lighting.sunDirection
       .set(Math.cos(solarAngle) * 0.82, rawAltitude, 0.28)
       .normalize();
@@ -186,8 +182,6 @@ export class Environment {
     this.sky.setSunDirection(this.lighting.sunDirection);
     this.sky.setPalette(this.tmpZenith, this.tmpHorizon, this.tmpSun);
 
-    // Darken the actual water body at night too; otherwise the custom ocean shader
-    // would remain daytime-bright even while the PBR terrain correctly goes dark.
     this.tmpOceanSurface.copy(this.shallowWater).lerp(this.nightWater, (1 - twilight) * 0.82);
     this.tmpOceanDeep.copy(this.deepWater).lerp(this.nightWater, (1 - twilight) * 0.9);
     this.ocean.setColors(this.tmpOceanSurface, this.tmpOceanDeep, this.tmpHorizon);
@@ -195,11 +189,11 @@ export class Environment {
     this.ocean.setSunColor(this.tmpSun);
     this.surfaceOptics.setColors(this.tmpOceanSurface, this.tmpHorizon);
     this.surfaceOptics.setSunDirection(this.lighting.sunDirection);
+    this.surfaceOptics.setSunColor(this.tmpSun);
   }
 
   private currentTwilight(rawAltitude?: number): number {
-    const altitude =
-      rawAltitude ?? Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
+    const altitude = rawAltitude ?? Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
     return smoothstep(-0.22, 0.06, altitude);
   }
 

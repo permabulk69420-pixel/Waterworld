@@ -62,9 +62,6 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  // Dense vegetation now lives in one GPU-instanced field attached directly to
-  // the scene. Loaded chunks only contribute deterministic placement records;
-  // the boot sliders still tune density and the short grass render radius.
   const seaGrass = new SeaGrassSystem(game.scene, {
     densityMultiplier: grassDensityPercent / 100,
     renderDistance: grassRenderDistance,
@@ -77,8 +74,6 @@ async function bootstrap(): Promise<void> {
   settings.setStatus('loading VR hands');
   await hands.ready;
 
-  // Motors are now ordinary physical pickups rather than magically appearing on
-  // the hands. Grip/squeeze grabs the nearest motor; trigger runs the held motor.
   const thrusters = new HandThrusters(
     game.renderer,
     hands,
@@ -89,33 +84,16 @@ async function bootstrap(): Promise<void> {
   settings.setStatus('loading hand motors');
   await thrusters.ready;
 
-  // Triggers belong only to held motors. A/X and B/Y remain manual vertical swim.
+  // Triggers belong only to motors that are actually being held. A/X and B/Y
+  // remain available for ordinary vertical swimming.
   game.xrInput.setTriggerVerticalEnabled(false);
 
-  let handLastFrameMs = 0;
-
-  const updateHands = (timeMs: number): void => {
-    const session = game.renderer.xr.getSession();
-    if (!session) {
-      handLastFrameMs = 0;
-      game.locomotion.clearPropulsionInput();
-      return;
-    }
-
-    const dt = handLastFrameMs === 0 ? 0 : Math.min((timeMs - handLastFrameMs) / 1000, 0.05);
-    handLastFrameMs = timeMs;
+  // Hands, pickups and propulsion now run on the game's one authoritative XR
+  // animation loop. This avoids a second XRSession.requestAnimationFrame chain
+  // seeing stale controller/head matrices.
+  game.addFrameListener((dt) => {
     hands.update(dt);
     thrusters.update();
-    session.requestAnimationFrame(updateHands);
-  };
-
-  game.renderer.xr.addEventListener('sessionstart', () => {
-    handLastFrameMs = 0;
-    game.renderer.xr.getSession()?.requestAnimationFrame(updateHands);
-  });
-  game.renderer.xr.addEventListener('sessionend', () => {
-    handLastFrameMs = 0;
-    game.locomotion.clearPropulsionInput();
   });
 
   // Handy for poking at the world from the browser console.
@@ -125,10 +103,6 @@ async function bootstrap(): Promise<void> {
     bootFill.style.width = `${Math.round(progress * 100)}%`;
     settings.setStatus(label);
   });
-
-  // Game.start() establishes the real player spawn, so place the two motor props
-  // afterwards: about a metre in front of the player's face and slightly lower.
-  thrusters.spawnNearPlayer();
 
   boot.classList.add('hidden');
   setTimeout(() => boot.remove(), 800);

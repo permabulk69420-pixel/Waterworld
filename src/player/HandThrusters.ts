@@ -25,6 +25,14 @@ const XR_SPAWN_DELAY_FRAMES = 4;
 const PROPELLER_MAX_RAD_PER_SECOND = Math.PI * 2 * 18;
 const PROPELLER_RESPONSE = 14;
 
+// GripPoint in the motor GLB is the point that belongs in the palm. The Quest raw
+// controller grip is closer to the wrist, so held motors parent to VRHands.objectGrip,
+// which is continuously synced to the rigged b_l_grip / b_r_grip hand bones.
+// The asset body currently falls on the anatomical inside of the forearm at its
+// authored roll; rolling 180 degrees about local Z keeps local -Z thrust unchanged
+// while moving the motor body to the outside of the arm.
+const HELD_MOTOR_ROLL = Math.PI;
+
 const _worldQuat = new Quaternion();
 const _direction = new Vector3();
 const _combined = new Vector3();
@@ -47,10 +55,9 @@ interface MotorPickup {
 /**
  * Two physical handheld propulsion motors.
  *
- * The motors are spawned only after WebXR is actually presenting so their initial
- * position comes from the tracked headset, not the desktop fallback camera. Squeeze
- * grip near a motor to pick it up, release grip to drop it, and use that hand's
- * trigger to spin the propeller and apply thrust along the held motor's orientation.
+ * Motors spawn as world props. Squeeze near one to grab it at the visible hand's
+ * actual palm/grip bone, release to drop it, and use that hand's trigger to spin
+ * the propeller and apply thrust along the held motor's orientation.
  */
 export class HandThrusters {
   readonly ready: Promise<void>;
@@ -175,8 +182,8 @@ export class HandThrusters {
       held.throttle = trigger;
       if (trigger <= 0.03) continue;
 
-      // A held motor is a real force source: its actual tracked orientation controls
-      // the acceleration vector, and two motors add together rather than normalizing.
+      // The motor root includes the final held mount transform, so using its world
+      // quaternion keeps thrust exactly aligned with the model after the outside-arm roll.
       held.root.updateWorldMatrix(true, false);
       held.root.getWorldQuaternion(_worldQuat);
       _direction.copy(LOCAL_FORWARD).applyQuaternion(_worldQuat).normalize();
@@ -274,11 +281,14 @@ export class HandThrusters {
 
   private tryGrab(handedness: Handedness): void {
     if (this.motorHeldBy(handedness)) return;
-    const grip = this.hands.getControllerGrip(handedness);
-    if (!grip) return;
 
-    grip.updateWorldMatrix(true, false);
-    grip.getWorldPosition(_handPosition);
+    // This is the actual rigged palm grip (b_l_grip / b_r_grip), not the raw Quest
+    // controller wrist transform. It is synchronized by VRHands every frame.
+    const palmGrip = this.hands.getObjectGrip(handedness);
+    if (!palmGrip) return;
+
+    palmGrip.updateWorldMatrix(true, false);
+    palmGrip.getWorldPosition(_handPosition);
 
     let nearest: MotorPickup | null = null;
     let nearestSq = PICKUP_RADIUS_SQ;
@@ -294,9 +304,13 @@ export class HandThrusters {
 
     if (!nearest) return;
 
-    grip.add(nearest.root);
+    // GripPoint is already the pickup root origin. Parenting to the hand's true grip
+    // socket and zeroing position therefore puts the handle in the palm instead of at
+    // the wrist. Roll around local Z only; this flips the body outward while keeping
+    // the -Z thrust axis exactly unchanged.
+    palmGrip.add(nearest.root);
     nearest.root.position.set(0, 0, 0);
-    nearest.root.quaternion.identity();
+    nearest.root.rotation.set(0, 0, HELD_MOTOR_ROLL);
     nearest.root.scale.set(1, 1, 1);
     nearest.heldBy = handedness;
   }

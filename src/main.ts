@@ -8,7 +8,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V3-OPEN-REAR-SHIP';
+const BUILD_TAG = 'BUILD-MODE-V4-LEDGE-CLIMB';
 
 /**
  * Bootstrap.
@@ -135,7 +135,7 @@ async function bootstrap(): Promise<void> {
   if (mode === 'build') {
     hint.textContent = 'BUILD · left trigger menu · right trigger select/click · grip moves selection · A/X up · B/Y down';
   } else {
-    hint.textContent = 'STORY · rear ship ledge: squeeze grip and physically pull yourself up';
+    hint.textContent = 'STORY · rear ship ledge: hold grip near the ledge and pull yourself up';
   }
 
   boot.classList.add('hidden');

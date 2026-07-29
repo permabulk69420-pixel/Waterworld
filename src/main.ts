@@ -1,5 +1,6 @@
 import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
+import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 
 /**
@@ -47,6 +48,33 @@ async function bootstrap(): Promise<void> {
       playableBounds,
       ...(number('workers') !== undefined ? { workerCount: number('workers')! } : {}),
     },
+  });
+
+  // Reuse the apartment project's rigged hands. VRHands creates the tracked
+  // controller/grip nodes under Waterworld's existing player rig, so the world
+  // locomotion code remains untouched.
+  const hands = new VRHands(game.renderer, game.rig.group);
+  let handLastFrameMs = 0;
+
+  const updateHands = (timeMs: number): void => {
+    const session = game.renderer.xr.getSession();
+    if (!session) {
+      handLastFrameMs = 0;
+      return;
+    }
+
+    const dt = handLastFrameMs === 0 ? 0 : Math.min((timeMs - handLastFrameMs) / 1000, 0.05);
+    handLastFrameMs = timeMs;
+    hands.update(dt);
+    session.requestAnimationFrame(updateHands);
+  };
+
+  game.renderer.xr.addEventListener('sessionstart', () => {
+    handLastFrameMs = 0;
+    game.renderer.xr.getSession()?.requestAnimationFrame(updateHands);
+  });
+  game.renderer.xr.addEventListener('sessionend', () => {
+    handLastFrameMs = 0;
   });
 
   // Handy for poking at the world from the browser console.

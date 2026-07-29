@@ -5,6 +5,8 @@ import { HandThrusters } from './player/HandThrusters.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 
+const BUILD_TAG = 'MOTOR-XR-V4';
+
 /**
  * Bootstrap.
  *
@@ -33,6 +35,7 @@ const settings = new BootSettings(
   number('grassDensity'),
   number('grassDistance'),
 );
+settings.setStatus(`${BUILD_TAG} · choose performance settings`);
 
 async function bootstrap(): Promise<void> {
   const {
@@ -41,9 +44,6 @@ async function bootstrap(): Promise<void> {
     grassRenderDistance,
   } = await settings.waitForStart();
 
-  // The original foundation temporarily bounded the authored region to +/-3
-  // chunks. Grow that temporary boundary when the user asks to see farther so
-  // the load-distance control actually has terrain available to stream.
   const baseBounds = DEFAULT_WORLD_CONFIG.playableBounds;
   const playableBounds = baseBounds
     ? {
@@ -67,11 +67,11 @@ async function bootstrap(): Promise<void> {
     renderDistance: grassRenderDistance,
   });
   game.content.register(seaGrass);
-  settings.setStatus('loading shallow vegetation');
+  settings.setStatus(`${BUILD_TAG} · loading shallow vegetation`);
   await seaGrass.ready;
 
   const hands = new VRHands(game.renderer, game.rig.group);
-  settings.setStatus('loading VR hands');
+  settings.setStatus(`${BUILD_TAG} · loading VR hands`);
   await hands.ready;
 
   const thrusters = new HandThrusters(
@@ -81,27 +81,22 @@ async function bootstrap(): Promise<void> {
     game.scene,
     game.rig,
   );
-  settings.setStatus('loading hand motors');
+  settings.setStatus(`${BUILD_TAG} · loading hand motors`);
   await thrusters.ready;
 
-  // Triggers belong only to motors that are actually being held. A/X and B/Y
-  // remain available for ordinary vertical swimming.
   game.xrInput.setTriggerVerticalEnabled(false);
 
-  // Hands, pickups and propulsion now run on the game's one authoritative XR
-  // animation loop. This avoids a second XRSession.requestAnimationFrame chain
-  // seeing stale controller/head matrices.
+  // Hands, pickups and propulsion run on the game's one authoritative XR frame.
   game.addFrameListener((dt) => {
     hands.update(dt);
     thrusters.update();
   });
 
-  // Handy for poking at the world from the browser console.
   (window as unknown as { game: Game }).game = game;
 
   await game.start((progress, label) => {
     bootFill.style.width = `${Math.round(progress * 100)}%`;
-    settings.setStatus(label);
+    settings.setStatus(`${BUILD_TAG} · ${label}`);
   });
 
   boot.classList.add('hidden');
@@ -111,5 +106,5 @@ async function bootstrap(): Promise<void> {
 
 bootstrap().catch((error: unknown) => {
   console.error(error);
-  settings.setStatus(`failed: ${error instanceof Error ? error.message : String(error)}`);
+  settings.setStatus(`${BUILD_TAG} · failed: ${error instanceof Error ? error.message : String(error)}`);
 });

@@ -211,7 +211,12 @@ export class Game {
     }
 
     // --- simulate --------------------------------------------------------
-    this.locomotion.update(dt, intent, extraYaw);
+    // Locomotion uses the exact same animated wave height as the ocean shader.
+    // Underwater movement therefore stops at the visible surface instead of
+    // continuing upward through it as unrestricted flight.
+    this.rig.getHeadPosition(_head);
+    const surfaceY = this.environment.ocean.heightAt(_head.x, _head.z, elapsed);
+    this.locomotion.update(dt, intent, extraYaw, surfaceY);
 
     this.rig.getHeadPosition(_head);
     this.rig.getHeadQuaternion(_headQuat);

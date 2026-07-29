@@ -2,12 +2,13 @@ import { Color, FogExp2, Scene, Vector3 } from 'three';
 import { Sky } from './Sky.ts';
 import { Ocean } from './Ocean.ts';
 import { Lighting } from './Lighting.ts';
+import { LightShafts } from './LightShafts.ts';
 import type { WorldConfig } from '../config/worldConfig.ts';
 import type { BiomeRegistry } from '../config/biomes/index.ts';
 import { saturate, smoothstep } from '../math/mathUtils.ts';
 
 /**
- * Ties the sky, ocean, lighting and fog into one "where am I" state.
+ * Ties the sky, ocean, lighting, fog and cheap volumetric cues into one state.
  *
  * Underwater visibility stays on cheap exponential fog for Quest. The shallow
  * colour is deliberately lifted toward a sunlit green-teal rather than using
@@ -18,6 +19,7 @@ export class Environment {
   readonly sky: Sky;
   readonly ocean: Ocean;
   readonly lighting: Lighting;
+  readonly shafts: LightShafts;
 
   /** 0 = fully above water, 1 = fully submerged. */
   submergence = 0;
@@ -47,6 +49,7 @@ export class Environment {
       rings: 56,
       segments: 96,
     });
+    this.shafts = new LightShafts(config.seaLevel, this.lighting.sunDirection);
 
     this.fog = new FogExp2(this.airFogColor.getHex(), 0.0016);
     scene.fog = this.fog;
@@ -55,6 +58,7 @@ export class Environment {
     scene.add(this.sky.mesh);
     scene.add(this.lighting.root);
     scene.add(this.ocean.mesh);
+    scene.add(this.shafts.root);
 
     this.sky.setSunDirection(this.lighting.sunDirection);
     this.ocean.setSunDirection(this.lighting.sunDirection);
@@ -74,7 +78,7 @@ export class Environment {
 
   /**
    * @param cameraPosition world position of the player's eyes
-   * @param elapsed        seconds since start, for the wave animation
+   * @param elapsed        seconds since start, for wave / light animation
    */
   update(cameraPosition: Vector3, elapsed: number): void {
     const surfaceY = this.ocean.heightAt(cameraPosition.x, cameraPosition.z, elapsed);
@@ -97,7 +101,8 @@ export class Environment {
 
     // Clear starting shallows; deeper water still closes in progressively.
     const waterDensity =
-      this.fogDensityShallow + (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
+      this.fogDensityShallow +
+      (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
     this.fog.density = 0.0016 + (waterDensity - 0.0016) * this.submergence;
 
     this.lighting.update(this.submergence, depthT, this.shallowWater, this.deepWater);
@@ -106,6 +111,7 @@ export class Environment {
     this.sky.setFogBlend(this.tmpColor, this.submergence);
     this.sky.followCamera(cameraPosition);
     this.ocean.update(elapsed, cameraPosition, this.submergence > 0.5);
+    this.shafts.update(elapsed, cameraPosition, this.submergence, this.depth, this.shallowWater);
   }
 
   get underwater(): boolean {
@@ -120,5 +126,6 @@ export class Environment {
     this.sky.dispose();
     this.ocean.dispose();
     this.lighting.dispose();
+    this.shafts.dispose();
   }
 }

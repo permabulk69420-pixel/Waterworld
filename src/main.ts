@@ -5,7 +5,7 @@ import { HandThrusters } from './player/HandThrusters.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 
-const BUILD_TAG = 'MOTOR-XR-V7';
+const BUILD_TAG = 'MOTOR-XR-V8-DAYNIGHT';
 
 /**
  * Bootstrap.
@@ -86,8 +86,6 @@ async function bootstrap(): Promise<void> {
 
   game.xrInput.setTriggerVerticalEnabled(false);
 
-  // Hands, pickups, propeller animation and propulsion all use the game's one
-  // authoritative XR frame and the same dt.
   game.addFrameListener((dt) => {
     hands.update(dt);
     thrusters.update(dt);

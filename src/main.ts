@@ -6,7 +6,7 @@ import { HandThrusters } from './player/HandThrusters.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V1';
+const BUILD_TAG = 'BUILD-MODE-V2-SHIP';
 
 /**
  * Bootstrap.

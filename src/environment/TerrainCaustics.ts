@@ -7,6 +7,9 @@ import { Color, MeshStandardMaterial } from 'three';
  * terrain fragment shader, fades with depth, and mostly affects upward-facing surfaces.
  * It is not physically exact, but it gives the shallows the moving broken-light look that
  * matters perceptually in VR for a very small GPU cost.
+ *
+ * Important: terrain can already have shader extensions (sand, biome layers, etc). Never
+ * replace those hooks; chain after them so every terrain effect survives compilation.
  */
 export class TerrainCaustics {
   private readonly timeUniform = { value: 0 };
@@ -17,7 +20,13 @@ export class TerrainCaustics {
   constructor(material: MeshStandardMaterial, seaLevel: number) {
     this.seaLevelUniform = { value: seaLevel };
 
-    material.onBeforeCompile = (shader) => {
+    const previousOnBeforeCompile = material.onBeforeCompile;
+    const previousProgramCacheKey = material.customProgramCacheKey;
+
+    material.onBeforeCompile = (shader, renderer) => {
+      // Preserve the base terrain shader first (currently shallow sand projection).
+      previousOnBeforeCompile.call(material, shader, renderer);
+
       shader.uniforms.uCausticTime = this.timeUniform;
       shader.uniforms.uCausticStrength = this.strengthUniform;
       shader.uniforms.uCausticSeaLevel = this.seaLevelUniform;
@@ -71,8 +80,10 @@ export class TerrainCaustics {
         );
     };
 
-    // Ensure Three does not reuse a program compiled before the injection existed.
-    material.customProgramCacheKey = () => 'waterworld-terrain-caustics-v1';
+    // Keep the earlier terrain program identity too; otherwise Three can reuse a shader
+    // compiled before one of the chained extensions was attached.
+    material.customProgramCacheKey = () =>
+      `${previousProgramCacheKey.call(material)}|waterworld-terrain-caustics-v2`;
     material.needsUpdate = true;
   }
 

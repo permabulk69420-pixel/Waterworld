@@ -39,6 +39,8 @@ export class Locomotion {
 
   private turnRate = 0;
   private swimming = true;
+  /** Sum of the two tracked hand-motor directions, each weighted 0..1 by trigger. */
+  private readonly propulsionInput = new Vector3();
 
   readonly state: LocomotionState = {
     speed: 0,
@@ -53,6 +55,21 @@ export class Locomotion {
     private readonly collision: CollisionWorld,
     private readonly config: PlayerConfig,
   ) {}
+
+  /**
+   * Supplies the current handheld-motor thrust vector. A single full trigger has
+   * magnitude 1; two aligned full triggers can reach magnitude 2. The vector is
+   * intentionally not normalized so two motors really do push harder than one.
+   */
+  setPropulsionInput(input: Vector3): void {
+    this.propulsionInput.copy(input);
+    const maxSq = 4;
+    if (this.propulsionInput.lengthSq() > maxSq) this.propulsionInput.setLength(2);
+  }
+
+  clearPropulsionInput(): void {
+    this.propulsionInput.set(0, 0, 0);
+  }
 
   /**
    * @param surfaceY Local animated ocean height at the player. Omit only for
@@ -142,7 +159,7 @@ export class Locomotion {
       _target.y *= factor;
     }
 
-    // Diagonal input should not exceed the top speed.
+    // Diagonal stick/button input should not exceed the authored swimming speed.
     const targetSpeed = _target.length();
     const maxSpeed = Math.hypot(speed, cfg.verticalSpeed);
     if (targetSpeed > maxSpeed) _target.multiplyScalar(maxSpeed / targetSpeed);
@@ -151,6 +168,18 @@ export class Locomotion {
     this.velocity.x = damp(this.velocity.x, _target.x, rate, dt);
     this.velocity.y = damp(this.velocity.y, _target.y, rate, dt);
     this.velocity.z = damp(this.velocity.z, _target.z, rate, dt);
+
+    // Hand motors are true acceleration, applied after ordinary swim steering.
+    // Pointing the two hands in different directions therefore produces the vector
+    // sum you would expect instead of snapping the player onto a canned direction.
+    if (this.propulsionInput.lengthSq() > 1e-7) {
+      this.velocity.addScaledVector(this.propulsionInput, cfg.propulsionAcceleration * dt);
+      const propelledSpeed = this.velocity.length();
+      if (propelledSpeed > cfg.propulsionMaxSpeed) {
+        this.velocity.multiplyScalar(cfg.propulsionMaxSpeed / propelledSpeed);
+      }
+    }
+
     this.velocity.multiplyScalar(Math.max(0, 1 - cfg.drag * dt));
     if (this.velocity.lengthSq() < 1e-6) this.velocity.set(0, 0, 0);
   }
@@ -159,7 +188,8 @@ export class Locomotion {
     const cfg = this.config;
 
     // Out of the water, stick movement is horizontal even if the player looks
-    // upward. Vertical swim buttons intentionally do nothing in air.
+    // upward. Vertical swim buttons intentionally do nothing in air. Hand motors
+    // are also ignored here; they are underwater propulsion tools, not jetpacks.
     this.rig.getHeadForward(_forward);
     _forward.y = 0;
     if (_forward.lengthSq() < 1e-6) _forward.set(0, 0, -1);
@@ -244,6 +274,7 @@ export class Locomotion {
   teleport(position: Vector3): void {
     this.velocity.set(0, 0, 0);
     this.turnRate = 0;
+    this.clearPropulsionInput();
     this.rig.setHeadPosition(position);
   }
 

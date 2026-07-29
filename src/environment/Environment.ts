@@ -9,14 +9,12 @@ import type { WorldConfig } from '../config/worldConfig.ts';
 import type { BiomeRegistry } from '../config/biomes/index.ts';
 import { saturate, smoothstep } from '../math/mathUtils.ts';
 
-/**
- * Ties the sky, ocean, lighting, fog and cheap volumetric cues into one state.
- *
- * Underwater visibility stays on cheap exponential fog for Quest. The shallow
- * colour is deliberately lifted toward a sunlit green-teal rather than using
- * the raw water colour as the entire scene background; otherwise terrain,
- * distant water and shadow all collapse into one blue slab.
- */
+// Fast enough to test in VR without turning normal play into a strobe-show calendar.
+// 0 = midnight, .25 = sunrise, .5 = noon, .75 = sunset.
+const DAY_LENGTH_SECONDS = 12 * 60;
+const START_TIME_OF_DAY = 10 / 24;
+
+/** Ties sky, ocean, lighting, fog, day/night and cheap volumetric cues together. */
 export class Environment {
   readonly sky: Sky;
   readonly ocean: Ocean;
@@ -28,13 +26,33 @@ export class Environment {
   submergence = 0;
   /** Depth of the camera below the water surface, in metres (>= 0). */
   depth = 0;
+  /** 0 midnight, .25 sunrise, .5 noon, .75 sunset. */
+  timeOfDay = START_TIME_OF_DAY;
+  /** 0 at full night, 1 in strong daylight. */
+  daylight = 1;
 
   private readonly fog: FogExp2;
-  private readonly airFogColor = new Color(0xb9c9cd);
+  private readonly dayAir = new Color(0xb9c9cd);
+  private readonly nightAir = new Color(0x020710);
+  private readonly nightWater = new Color(0x03131d);
+  private readonly dayZenith = new Color(0x5d86a4);
+  private readonly dayHorizon = new Color(0xb9c9cd);
+  private readonly nightZenith = new Color(0x01040d);
+  private readonly nightHorizon = new Color(0x07101d);
+  private readonly duskHorizon = new Color(0xd07858);
+  private readonly daySunColor = new Color(0xfff4e2);
+  private readonly duskSunColor = new Color(0xff8b52);
+  private readonly blackSun = new Color(0x000000);
   private readonly shallowWater = new Color();
   private readonly deepWater = new Color();
   private readonly sunlitWater = new Color(0x72b5ae);
   private readonly tmpColor = new Color();
+  private readonly tmpAir = new Color();
+  private readonly tmpZenith = new Color();
+  private readonly tmpHorizon = new Color();
+  private readonly tmpSun = new Color();
+  private readonly tmpOceanSurface = new Color();
+  private readonly tmpOceanDeep = new Color();
   private fogDensityShallow = 0.016;
   private fogDensityDeep = 0.038;
   private maxDepth = 50;
@@ -56,9 +74,9 @@ export class Environment {
     this.surfaceOptics = new SurfaceOptics(config.seaLevel);
     this.shafts = new LightShafts(config.seaLevel, this.lighting.sunDirection);
 
-    this.fog = new FogExp2(this.airFogColor.getHex(), 0.0016);
+    this.fog = new FogExp2(this.dayAir.getHex(), 0.0016);
     scene.fog = this.fog;
-    scene.background = this.airFogColor.clone();
+    scene.background = this.dayAir.clone();
 
     scene.add(this.sky.mesh);
     scene.add(this.lighting.root);
@@ -66,69 +84,125 @@ export class Environment {
     scene.add(this.surfaceOptics.mesh);
     scene.add(this.shafts.root);
 
-    this.sky.setSunDirection(this.lighting.sunDirection);
-    this.ocean.setSunDirection(this.lighting.sunDirection);
-    this.surfaceOptics.setSunDirection(this.lighting.sunDirection);
     this.applyBiome(biomes);
+    this.updateTimeOfDay(0);
   }
 
-  /** Pulls water colours and fog densities from the biome the player is in. */
   applyBiome(biomes: BiomeRegistry, x = 0, z = 0): void {
-    const v = biomes.biomeAt(x, z).visuals;
+    const biome = biomes.biomeAt(x, z);
+    const v = biome.visuals;
     this.shallowWater.setHex(v.waterShallowColor);
     this.deepWater.setHex(v.waterDeepColor);
     this.fogDensityShallow = v.fogDensityShallow;
     this.fogDensityDeep = v.fogDensityDeep;
-    this.maxDepth = biomes.biomeAt(x, z).terrain.maxDepth;
-    this.ocean.setColors(this.shallowWater, this.deepWater, this.sky.horizonColor);
-    this.surfaceOptics.setColors(this.shallowWater, this.sky.horizonColor);
+    this.maxDepth = biome.terrain.maxDepth;
   }
 
   /**
    * @param cameraPosition world position of the player's eyes
-   * @param elapsed        seconds since start, for wave / light animation
+   * @param elapsed        seconds since start, for waves, sun motion and effects
    */
   update(cameraPosition: Vector3, elapsed: number): void {
-    // ChunkManager owns one shared MeshStandardMaterial. Chunks are loaded after this
-    // Environment is constructed, so attach the caustic shader lazily to the first one.
     if (!this.terrainCaustics) this.tryAttachTerrainCaustics();
+    this.updateTimeOfDay(elapsed);
     this.terrainCaustics?.update(elapsed);
+    this.terrainCaustics?.setStrength(0.52 * this.daylight);
 
     const surfaceY = this.ocean.heightAt(cameraPosition.x, cameraPosition.z, elapsed);
     this.depth = Math.max(0, surfaceY - cameraPosition.y);
-
-    // Transition band straddling the local (wavy) surface height.
     this.submergence = smoothstep(surfaceY + 0.22, surfaceY - 0.28, cameraPosition.y);
 
     const depthT = saturate(this.depth / this.maxDepth);
     const depthColorT = Math.pow(depthT, 1.45);
+    const nightFactor = 1 - this.daylight;
 
-    // Near the surface, borrow a little warm green daylight so the world does
-    // not become uniformly cyan. Fade naturally into the biome's deep colour.
+    // Underwater daylight now genuinely disappears at night. Near-surface green lift
+    // only exists while the sun is useful; darkness then trends to a deep blue-black.
     this.tmpColor.copy(this.shallowWater);
-    this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24);
+    this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24 * this.daylight);
     this.tmpColor.lerp(this.deepWater, depthColorT);
-    this.tmpColor.lerp(this.airFogColor, 1 - this.submergence);
+    this.tmpColor.lerp(this.nightWater, nightFactor * (0.78 + depthT * 0.12));
+    this.tmpColor.lerp(this.tmpAir, 1 - this.submergence);
     this.fog.color.copy(this.tmpColor);
     if (this.scene.background instanceof Color) this.scene.background.copy(this.tmpColor);
 
-    // Clear starting shallows; deeper water still closes in progressively.
     const waterDensity =
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
-    this.fog.density = 0.0016 + (waterDensity - 0.0016) * this.submergence;
+    const nightDensity = waterDensity * (1 + 0.16 * nightFactor);
+    this.fog.density = 0.0016 + (nightDensity - 0.0016) * this.submergence;
 
-    this.lighting.update(this.submergence, depthT, this.shallowWater, this.deepWater);
+    this.lighting.update(
+      this.submergence,
+      depthT,
+      this.shallowWater,
+      this.deepWater,
+      this.daylight,
+      this.currentTwilight(),
+    );
     this.lighting.follow(cameraPosition);
-    this.sky.setExposure(1 - 0.5 * this.submergence);
+
+    this.sky.setExposure((0.18 + 0.82 * this.currentTwilight()) * (1 - 0.5 * this.submergence));
     this.sky.setFogBlend(this.tmpColor, this.submergence);
     this.sky.followCamera(cameraPosition);
+
     this.ocean.update(elapsed, cameraPosition, this.submergence > 0.5);
     this.surfaceOptics.update(elapsed, cameraPosition, this.submergence > 0.5);
-    this.shafts.update(elapsed, cameraPosition, this.submergence, this.depth, this.shallowWater);
+    this.shafts.update(
+      elapsed,
+      cameraPosition,
+      this.submergence,
+      this.depth,
+      this.shallowWater,
+      this.lighting.sunDirection,
+      this.daylight,
+    );
   }
 
-  /** Find one streamed terrain chunk; all chunks share this same material instance. */
+  private updateTimeOfDay(elapsed: number): void {
+    this.timeOfDay = (START_TIME_OF_DAY + elapsed / DAY_LENGTH_SECONDS) % 1;
+    const solarAngle = (this.timeOfDay - 0.25) * Math.PI * 2;
+    const rawAltitude = Math.sin(solarAngle);
+
+    // The sun travels east-west with a slight fixed Z component so the light is never
+    // perfectly aligned with a world axis. Negative Y naturally puts it below horizon.
+    this.lighting.sunDirection
+      .set(Math.cos(solarAngle) * 0.82, rawAltitude, 0.28)
+      .normalize();
+
+    this.daylight = smoothstep(-0.03, 0.22, rawAltitude);
+    const twilight = this.currentTwilight(rawAltitude);
+    const horizonBand = 1 - smoothstep(0.04, 0.42, Math.abs(rawAltitude));
+    const duskAmount = horizonBand * twilight;
+
+    this.tmpAir.copy(this.nightAir).lerp(this.dayAir, twilight);
+    this.tmpZenith.copy(this.nightZenith).lerp(this.dayZenith, twilight);
+    this.tmpHorizon.copy(this.nightHorizon).lerp(this.dayHorizon, twilight);
+    this.tmpHorizon.lerp(this.duskHorizon, duskAmount * 0.72);
+
+    this.tmpSun.copy(this.duskSunColor).lerp(this.daySunColor, this.daylight);
+    this.tmpSun.lerp(this.blackSun, 1 - twilight);
+
+    this.sky.setSunDirection(this.lighting.sunDirection);
+    this.sky.setPalette(this.tmpZenith, this.tmpHorizon, this.tmpSun);
+
+    // Darken the actual water body at night too; otherwise the custom ocean shader
+    // would remain daytime-bright even while the PBR terrain correctly goes dark.
+    this.tmpOceanSurface.copy(this.shallowWater).lerp(this.nightWater, (1 - twilight) * 0.82);
+    this.tmpOceanDeep.copy(this.deepWater).lerp(this.nightWater, (1 - twilight) * 0.9);
+    this.ocean.setColors(this.tmpOceanSurface, this.tmpOceanDeep, this.tmpHorizon);
+    this.ocean.setSunDirection(this.lighting.sunDirection);
+    this.ocean.setSunColor(this.tmpSun);
+    this.surfaceOptics.setColors(this.tmpOceanSurface, this.tmpHorizon);
+    this.surfaceOptics.setSunDirection(this.lighting.sunDirection);
+  }
+
+  private currentTwilight(rawAltitude?: number): number {
+    const altitude =
+      rawAltitude ?? Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
+    return smoothstep(-0.22, 0.06, altitude);
+  }
+
   private tryAttachTerrainCaustics(): void {
     const terrain = this.scene.getObjectByName('terrain');
     if (!terrain) return;

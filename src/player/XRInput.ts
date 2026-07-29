@@ -6,20 +6,19 @@ import type { PlayerConfig } from './playerConfig.ts';
 /**
  * Quest controller input.
  *
- * Keep this intentionally boring and explicit while the locomotion is being tuned:
+ * Base mapping:
  *   left stick   - swim forward/back and strafe
  *   right stick  - smooth turn (horizontal axis only)
  *   A / X        - ascend
  *   B / Y        - descend
- *   right trigger- analog ascend
- *   left trigger - analog descend
+ *   triggers     - temporary analog vertical fallback until hand motors load
  *
- * Grip boost is deliberately disabled for now. On Touch controllers the squeeze
- * control is very easy to hold unintentionally, and the old mapping could nearly
- * double swimming speed just from gripping the controller.
+ * Once the optional hand-thruster asset is available, triggerVerticalEnabled is
+ * disabled and each trigger is reserved for its own tracked-hand motor instead.
  */
 export class XRInput {
   private readonly intent = createMoveIntent();
+  private triggerVerticalEnabled = true;
 
   /** Set when at least one usable left/right controller reported a gamepad. */
   connected = false;
@@ -33,6 +32,11 @@ export class XRInput {
     private readonly renderer: WebGLRenderer,
     private readonly config: PlayerConfig,
   ) {}
+
+  /** Reserve/release the analog triggers for another locomotion system. */
+  setTriggerVerticalEnabled(enabled: boolean): void {
+    this.triggerVerticalEnabled = enabled;
+  }
 
   poll(): MoveIntent {
     const intent = resetMoveIntent(this.intent);
@@ -76,7 +80,7 @@ export class XRInput {
         intent.turn = deadzone1(ax, this.config.turnDeadzone);
         if (primary) ascend = 1;
         if (secondary) descend = 1;
-        ascend = Math.max(ascend, trigger);
+        if (this.triggerVerticalEnabled) ascend = Math.max(ascend, trigger);
       } else {
         // Left controller is translation only.
         const [sx, sy] = applyDeadzone(ax, ay, this.config.moveDeadzone);
@@ -85,7 +89,7 @@ export class XRInput {
 
         if (primary) ascend = 1;
         if (secondary) descend = 1;
-        descend = Math.max(descend, trigger);
+        if (this.triggerVerticalEnabled) descend = Math.max(descend, trigger);
 
         if (gamepad.buttons[3]?.pressed) debugToggle = true;
       }

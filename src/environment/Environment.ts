@@ -1,8 +1,9 @@
-import { Color, FogExp2, Scene, Vector3 } from 'three';
+import { Color, FogExp2, Mesh, MeshStandardMaterial, Scene, Vector3 } from 'three';
 import { Sky } from './Sky.ts';
 import { Ocean } from './Ocean.ts';
 import { Lighting } from './Lighting.ts';
 import { LightShafts } from './LightShafts.ts';
+import { TerrainCaustics } from './TerrainCaustics.ts';
 import type { WorldConfig } from '../config/worldConfig.ts';
 import type { BiomeRegistry } from '../config/biomes/index.ts';
 import { saturate, smoothstep } from '../math/mathUtils.ts';
@@ -35,6 +36,7 @@ export class Environment {
   private fogDensityShallow = 0.016;
   private fogDensityDeep = 0.038;
   private maxDepth = 50;
+  private terrainCaustics: TerrainCaustics | null = null;
 
   constructor(
     private readonly scene: Scene,
@@ -81,6 +83,11 @@ export class Environment {
    * @param elapsed        seconds since start, for wave / light animation
    */
   update(cameraPosition: Vector3, elapsed: number): void {
+    // ChunkManager owns one shared MeshStandardMaterial. Chunks are loaded after this
+    // Environment is constructed, so attach the caustic shader lazily to the first one.
+    if (!this.terrainCaustics) this.tryAttachTerrainCaustics();
+    this.terrainCaustics?.update(elapsed);
+
     const surfaceY = this.ocean.heightAt(cameraPosition.x, cameraPosition.z, elapsed);
     this.depth = Math.max(0, surfaceY - cameraPosition.y);
 
@@ -112,6 +119,20 @@ export class Environment {
     this.sky.followCamera(cameraPosition);
     this.ocean.update(elapsed, cameraPosition, this.submergence > 0.5);
     this.shafts.update(elapsed, cameraPosition, this.submergence, this.depth, this.shallowWater);
+  }
+
+  /** Find one streamed terrain chunk; all chunks share this same material instance. */
+  private tryAttachTerrainCaustics(): void {
+    const terrain = this.scene.getObjectByName('terrain');
+    if (!terrain) return;
+
+    for (const child of terrain.children) {
+      if (!(child instanceof Mesh)) continue;
+      const material = child.material;
+      if (!(material instanceof MeshStandardMaterial)) continue;
+      this.terrainCaustics = new TerrainCaustics(material, this.config.seaLevel);
+      return;
+    }
   }
 
   get underwater(): boolean {

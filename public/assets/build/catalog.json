@@ -9,7 +9,7 @@
   {
     "id": "crashed-research-ship",
     "label": "Crashed Research Ship",
-    "url": "./assets/build/ships/crashed_research_ship.glb",
+    "url": "./assets/build/ships/crashed_interplanetary_research_spacecraft.glb",
     "scale": 1,
     "spawnDistance": 24,
     "spawnY": 0

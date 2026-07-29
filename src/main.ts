@@ -8,10 +8,12 @@ import { BootSettings } from './ui/BootSettings.ts';
  * Bootstrap.
  *
  * URL parameters (all optional):
- *   ?seed=12345    world seed
- *   ?debug=1       start with the debug HUD visible
- *   ?view=4        initial load-distance slider value
- *   ?workers=0     force main-thread terrain generation
+ *   ?seed=12345         world seed
+ *   ?debug=1            start with the debug HUD visible
+ *   ?view=4             initial terrain load-distance slider value
+ *   ?grassDensity=100   initial grass density percentage
+ *   ?grassDistance=46   initial grass render distance in metres
+ *   ?workers=0          force main-thread terrain generation
  */
 const params = new URLSearchParams(location.search);
 const number = (key: string): number | undefined => {
@@ -25,10 +27,18 @@ const boot = document.getElementById('boot')!;
 const bootFill = document.getElementById('boot-fill')!;
 const hint = document.getElementById('hint')!;
 const hudElement = document.getElementById('debug-hud')!;
-const settings = new BootSettings(number('view'));
+const settings = new BootSettings(
+  number('view'),
+  number('grassDensity'),
+  number('grassDistance'),
+);
 
 async function bootstrap(): Promise<void> {
-  const { viewDistanceChunks } = await settings.waitForStart();
+  const {
+    viewDistanceChunks,
+    grassDensityPercent,
+    grassRenderDistance,
+  } = await settings.waitForStart();
 
   // The original foundation temporarily bounded the authored region to +/-3
   // chunks. Grow that temporary boundary when the user asks to see farther so
@@ -51,9 +61,12 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  // First biome dressing pass. The system records deterministic placements for
-  // loaded chunks, but only creates actual grass meshes close to the player.
-  const seaGrass = new SeaGrassSystem();
+  // First biome dressing pass. The boot controls deliberately tune vegetation
+  // independently from terrain so we can find a Quest-friendly sweet spot.
+  const seaGrass = new SeaGrassSystem({
+    densityMultiplier: grassDensityPercent / 100,
+    renderDistance: grassRenderDistance,
+  });
   game.content.register(seaGrass);
   settings.setStatus('loading shallow vegetation');
   await seaGrass.ready;

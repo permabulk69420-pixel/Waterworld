@@ -1,10 +1,11 @@
 import {
   AnimationMixer,
   MathUtils,
-  Object3D,
   Vector3,
   type AnimationClip,
+  type Group,
   type Mesh,
+  type Object3D,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { BiomeConfig } from '../config/biomes/types.ts';
@@ -13,22 +14,52 @@ import type { ChunkContentContext, ContentPopulator } from './ContentRegistry.ts
 const UP = new Vector3(0, 1, 0);
 const ASSET_URL = './assets/biomes/safe-shallows/tropical_seagrass_lush_animated.glb';
 
+// Terrain can stay visible much farther away than small vegetation. Only create
+// expensive GLB clones near the player, stop drawing them before they become
+// unreadable through the water, and only animate the closest ones.
+const RENDER_DISTANCE = 46;
+const UNLOAD_DISTANCE = 62;
+const ANIMATION_DISTANCE = 26;
+const RENDER_DISTANCE_SQ = RENDER_DISTANCE * RENDER_DISTANCE;
+const UNLOAD_DISTANCE_SQ = UNLOAD_DISTANCE * UNLOAD_DISTANCE;
+const ANIMATION_DISTANCE_SQ = ANIMATION_DISTANCE * ANIMATION_DISTANCE;
+
+interface ActivePatch {
+  object: Object3D;
+  mixer: AnimationMixer | null;
+}
+
+interface GrassPlacement {
+  position: Vector3;
+  normal: Vector3;
+  rotationY: number;
+  scale: number;
+  phase: number;
+  timeScale: number;
+  active: ActivePatch | null;
+}
+
+interface ChunkGrassState {
+  group: Group;
+  placements: GrassPlacement[];
+}
+
 /**
  * First vegetation pass for the Safe Shallows.
  *
- * The GLB is loaded once, then scene clones are scattered deterministically per
- * chunk. For this first test each patch owns cloned geometry/material resources,
- * which keeps the existing chunk disposal path completely safe. Once the look is
- * approved we can move dense fields to shared/instanced shader vegetation.
+ * Chunk loading only calculates cheap deterministic placement records. The GLB
+ * itself is cloned on demand when the player gets close, so vegetation no longer
+ * inherits the terrain's much larger streaming distance.
  */
 export class SeaGrassSystem implements ContentPopulator {
   readonly id = 'safe-shallows-seagrass-v1';
   readonly layer = 'vegetation' as const;
+  readonly keepsEmptyGroup = true;
   readonly ready: Promise<void>;
 
   private template: Object3D | null = null;
   private swayClip: AnimationClip | null = null;
-  private readonly mixersByChunk = new Map<string, AnimationMixer[]>();
+  private readonly chunks = new Map<string, ChunkGrassState>();
   private loadFailed = false;
 
   constructor() {
@@ -67,84 +98,144 @@ export class SeaGrassSystem implements ContentPopulator {
     const chunkWidth = ctx.bounds.max.x - ctx.bounds.min.x;
     const chunkDepth = ctx.bounds.max.z - ctx.bounds.min.z;
     const targetCount = Math.max(0, Math.round((chunkWidth * chunkDepth * density) / 100));
-    if (targetCount === 0) return;
+    const placements: GrassPlacement[] = [];
 
-    // Ask for extra candidates because this first grass species only likes the
-    // brighter, gentler upper shallows. Later vegetation species can occupy the
-    // rejected deeper/steeper points.
-    const candidates = ctx.sampleSeabedPoints(targetCount * 5, 0.82);
-    const mixers: AnimationMixer[] = [];
-    let placed = 0;
+    if (targetCount > 0) {
+      // Ask for extra candidates because this species only likes the brighter,
+      // gentler upper shallows. Rejected sites remain available for later plants.
+      const candidates = ctx.sampleSeabedPoints(targetCount * 5, 0.82);
 
-    for (const point of candidates) {
-      if (placed >= targetCount) break;
-      if (point.depth < 3 || point.depth > 18) continue;
+      for (const point of candidates) {
+        if (placements.length >= targetCount) break;
+        if (point.depth < 3 || point.depth > 18) continue;
 
-      const patch = this.template.clone(true);
-      patch.name = `seagrass:${ctx.key}:${placed}`;
-      patch.position.copy(point.position).addScaledVector(point.normal, 0.015);
-
-      // Y-up asset -> seabed normal, then spin around its own local up axis so
-      // repeated patches never present the same silhouette.
-      patch.quaternion.setFromUnitVectors(UP, point.normal);
-      patch.rotateY(ctx.rng.range(0, Math.PI * 2));
-      const scale = ctx.rng.range(0.82, 1.22);
-      patch.scale.setScalar(scale);
-
-      patch.traverse((object) => {
-        const mesh = object as Mesh;
-        if (!mesh.isMesh) return;
-        mesh.castShadow = false;
-        mesh.receiveShadow = false;
-        // ContentRegistry disposes chunk content on unload. Give each test patch
-        // its own resources so unloading one chunk cannot invalidate another.
-        mesh.geometry = mesh.geometry.clone();
-        if (Array.isArray(mesh.material)) {
-          mesh.material = mesh.material.map((material) => material.clone());
-        } else {
-          mesh.material = mesh.material.clone();
-        }
-      });
-
-      ctx.group.add(patch);
-
-      if (this.swayClip) {
-        const mixer = new AnimationMixer(patch);
-        const action = mixer.clipAction(this.swayClip);
-        action.play();
-        action.time = ctx.rng.range(0, Math.max(0.001, this.swayClip.duration));
-        action.timeScale = ctx.rng.range(0.88, 1.12);
-        mixers.push(mixer);
+        placements.push({
+          position: point.position.clone().addScaledVector(point.normal, 0.015),
+          normal: point.normal.clone(),
+          rotationY: ctx.rng.range(0, Math.PI * 2),
+          scale: ctx.rng.range(0.82, 1.22),
+          phase: this.swayClip
+            ? ctx.rng.range(0, Math.max(0.001, this.swayClip.duration))
+            : 0,
+          timeScale: ctx.rng.range(0.88, 1.12),
+          active: null,
+        });
       }
-
-      placed++;
     }
 
-    if (mixers.length > 0) this.mixersByChunk.set(ctx.key, mixers);
+    this.chunks.set(ctx.key, { group: ctx.group, placements });
   }
 
-  update(dt: number): void {
-    if (dt <= 0) return;
+  update(dt: number, playerPosition: Vector3): void {
+    if (!this.template || this.loadFailed) return;
+
     const safeDt = MathUtils.clamp(dt, 0, 0.05);
-    for (const mixers of this.mixersByChunk.values()) {
-      for (const mixer of mixers) mixer.update(safeDt);
+
+    for (const chunk of this.chunks.values()) {
+      for (const placement of chunk.placements) {
+        const dx = placement.position.x - playerPosition.x;
+        const dz = placement.position.z - playerPosition.z;
+        const distanceSq = dx * dx + dz * dz;
+
+        if (!placement.active) {
+          if (distanceSq <= RENDER_DISTANCE_SQ) {
+            placement.active = this.createPatch(chunk.group, placement);
+          }
+          continue;
+        }
+
+        if (distanceSq > UNLOAD_DISTANCE_SQ) {
+          this.destroyPatch(placement.active);
+          placement.active = null;
+          continue;
+        }
+
+        // Hysteresis keeps a patch alive a little beyond the creation distance so
+        // swimming around the cutoff does not repeatedly allocate/free GLB clones.
+        placement.active.object.visible = distanceSq <= RENDER_DISTANCE_SQ;
+
+        // Morph animation is relatively CPU-heavy. At this distance the sway is
+        // visually negligible anyway, so only update the nearest patches.
+        if (placement.active.mixer && distanceSq <= ANIMATION_DISTANCE_SQ) {
+          placement.active.mixer.update(safeDt);
+        }
+      }
     }
+  }
+
+  private createPatch(group: Group, placement: GrassPlacement): ActivePatch {
+    if (!this.template) throw new Error('Seagrass template is not loaded');
+
+    const patch = this.template.clone(true);
+    patch.position.copy(placement.position);
+    patch.quaternion.setFromUnitVectors(UP, placement.normal);
+    patch.rotateY(placement.rotationY);
+    patch.scale.setScalar(placement.scale);
+
+    // The current generic chunk disposer assumes content owns its GPU resources.
+    // Clone them only for nearby active patches; distant chunks now hold placement
+    // records instead of hundreds of invisible copies.
+    patch.traverse((object) => {
+      const mesh = object as Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.geometry = mesh.geometry.clone();
+      if (Array.isArray(mesh.material)) {
+        mesh.material = mesh.material.map((material) => material.clone());
+      } else {
+        mesh.material = mesh.material.clone();
+      }
+    });
+
+    group.add(patch);
+
+    let mixer: AnimationMixer | null = null;
+    if (this.swayClip) {
+      mixer = new AnimationMixer(patch);
+      const action = mixer.clipAction(this.swayClip);
+      action.play();
+      action.time = placement.phase;
+      action.timeScale = placement.timeScale;
+    }
+
+    return { object: patch, mixer };
+  }
+
+  private destroyPatch(active: ActivePatch): void {
+    active.mixer?.stopAllAction();
+    active.object.traverse((object) => {
+      const mesh = object as Mesh;
+      if (!mesh.isMesh) return;
+      mesh.geometry.dispose();
+      if (Array.isArray(mesh.material)) {
+        for (const material of mesh.material) material.dispose();
+      } else {
+        mesh.material.dispose();
+      }
+    });
+    active.object.removeFromParent();
   }
 
   dispose(key?: string): void {
     if (key !== undefined) {
-      const mixers = this.mixersByChunk.get(key);
-      if (mixers) {
-        for (const mixer of mixers) mixer.stopAllAction();
+      const chunk = this.chunks.get(key);
+      if (chunk) {
+        for (const placement of chunk.placements) {
+          if (placement.active) this.destroyPatch(placement.active);
+          placement.active = null;
+        }
       }
-      this.mixersByChunk.delete(key);
+      this.chunks.delete(key);
       return;
     }
 
-    for (const mixers of this.mixersByChunk.values()) {
-      for (const mixer of mixers) mixer.stopAllAction();
+    for (const chunk of this.chunks.values()) {
+      for (const placement of chunk.placements) {
+        if (placement.active) this.destroyPatch(placement.active);
+      }
     }
-    this.mixersByChunk.clear();
+    this.chunks.clear();
 
     this.template?.traverse((object) => {
       const mesh = object as Mesh;

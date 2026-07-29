@@ -1,5 +1,4 @@
 import {
-  BoxGeometry,
   DoubleSide,
   Group,
   Matrix4,
@@ -23,6 +22,8 @@ const PICKUP_RADIUS = 0.45;
 const PICKUP_RADIUS_SQ = PICKUP_RADIUS * PICKUP_RADIUS;
 const GRAB_THRESHOLD = 0.55;
 const XR_SPAWN_DELAY_FRAMES = 4;
+const PROPELLER_MAX_RAD_PER_SECOND = Math.PI * 2 * 18;
+const PROPELLER_RESPONSE = 14;
 
 const _worldQuat = new Quaternion();
 const _direction = new Vector3();
@@ -38,7 +39,9 @@ const _motorPosition = new Vector3();
 interface MotorPickup {
   root: Group;
   heldBy: Handedness | null;
-  proxy: Mesh;
+  propeller: Object3D | null;
+  throttle: number;
+  propellerSpeed: number;
 }
 
 /**
@@ -47,7 +50,7 @@ interface MotorPickup {
  * The motors are spawned only after WebXR is actually presenting so their initial
  * position comes from the tracked headset, not the desktop fallback camera. Squeeze
  * grip near a motor to pick it up, release grip to drop it, and use that hand's
- * trigger to apply thrust along the held motor's real orientation.
+ * trigger to spin the propeller and apply thrust along the held motor's orientation.
  */
 export class HandThrusters {
   readonly ready: Promise<void>;
@@ -78,9 +81,8 @@ export class HandThrusters {
       this.template = gltf.scene;
       this.template.visible = true;
 
-      // The uploaded GLB is tiny and already carries vertex colours. For this first
-      // gameplay pass use unlit materials so underwater lighting can never make it
-      // appear black/invisible. We can restore PBR once placement is confirmed.
+      // Keep the confirmed-visible unlit look for now. It is cheap on Quest and
+      // preserves the GLB's authored vertex colours through underwater fog/lighting.
       this.template.traverse((object) => {
         if (!(object instanceof Mesh)) return;
         object.visible = true;
@@ -104,15 +106,16 @@ export class HandThrusters {
       if (!this.template.getObjectByName('GripPoint')) {
         console.warn('[thrusters] motor has no GripPoint helper; pickup will use scene origin');
       }
+      if (!this.template.getObjectByName('Propeller')) {
+        console.warn('[thrusters] motor has no Propeller node; thrust will work without visual spin');
+      }
     } catch (error) {
-      // A visible proxy motor is still spawned even if the GLB fails. That keeps the
-      // pickup/gameplay path testable and makes asset-loading failures unambiguous.
       console.warn(`[thrusters] motor visual failed to load at ${MOTOR_URL}`, error);
     }
   }
 
   /** Called from the game's authoritative frame loop. */
-  update(): void {
+  update(dt = 0): void {
     if (this.disposed) return;
 
     const presenting = this.renderer.xr.isPresenting;
@@ -147,6 +150,8 @@ export class HandThrusters {
       return;
     }
 
+    for (const motor of this.motors) motor.throttle = 0;
+
     _combined.set(0, 0, 0);
     const seen = new Set<Handedness>();
 
@@ -165,8 +170,13 @@ export class HandThrusters {
 
       const held = this.motorHeldBy(handedness);
       const trigger = source.gamepad?.buttons[0]?.value ?? 0;
-      if (!held || trigger <= 0.03) continue;
+      if (!held) continue;
 
+      held.throttle = trigger;
+      if (trigger <= 0.03) continue;
+
+      // A held motor is a real force source: its actual tracked orientation controls
+      // the acceleration vector, and two motors add together rather than normalizing.
       held.root.updateWorldMatrix(true, false);
       held.root.getWorldQuaternion(_worldQuat);
       _direction.copy(LOCAL_FORWARD).applyQuaternion(_worldQuat).normalize();
@@ -179,7 +189,23 @@ export class HandThrusters {
       this.previousSqueeze[handedness] = 0;
     }
 
+    this.animatePropellers(dt);
     this.locomotion.setPropulsionInput(_combined);
+  }
+
+  private animatePropellers(dt: number): void {
+    if (dt <= 0) return;
+    const blend = 1 - Math.exp(-PROPELLER_RESPONSE * dt);
+
+    for (const motor of this.motors) {
+      const targetSpeed = motor.throttle * PROPELLER_MAX_RAD_PER_SECOND;
+      motor.propellerSpeed += (targetSpeed - motor.propellerSpeed) * blend;
+      if (Math.abs(motor.propellerSpeed) < 0.01) motor.propellerSpeed = 0;
+
+      // The uploaded propeller sits in the XY plane at the rear of the motor, so its
+      // shaft axis is local Z. Spin that node directly rather than animating the body.
+      if (motor.propeller) motor.propeller.rotation.z += motor.propellerSpeed * dt;
+    }
   }
 
   private spawnNearTrackedHead(): void {
@@ -198,12 +224,14 @@ export class HandThrusters {
     if (_spawnRight.lengthSq() < 1e-6) _spawnRight.set(1, 0, 0);
     _spawnRight.normalize();
 
-    this.spawnOne(-0.36, 'left', 0x00e5ff);
-    this.spawnOne(0.36, 'right', 0xffe600);
+    this.spawnOne(-0.36, 'left');
+    this.spawnOne(0.36, 'right');
   }
 
-  private spawnOne(sideOffset: number, label: string, proxyColor: number): void {
-    const root = this.createPickupRoot(proxyColor);
+  private spawnOne(sideOffset: number, label: string): void {
+    if (!this.template) return;
+
+    const root = this.createPickupRoot();
     root.name = `world-hand-motor-${label}`;
 
     _motorPosition
@@ -217,40 +245,30 @@ export class HandThrusters {
     root.scale.set(1, 1, 1);
     this.scene.add(root);
 
-    const proxy = root.getObjectByName('motor-visible-proxy') as Mesh;
-    this.motors.push({ root, heldBy: null, proxy });
+    this.motors.push({
+      root,
+      heldBy: null,
+      propeller: root.getObjectByName('Propeller'),
+      throttle: 0,
+      propellerSpeed: 0,
+    });
   }
 
   /** Builds a pickup root whose local origin is the GLB's GripPoint helper. */
-  private createPickupRoot(proxyColor: number): Group {
+  private createPickupRoot(): Group {
     const anchor = new Group();
+    const visual = this.template!.clone(true);
+    visual.name = 'hand-motor-visual';
 
-    if (this.template) {
-      const visual = this.template.clone(true);
-      visual.name = 'hand-motor-visual';
-
-      const gripPoint = visual.getObjectByName('GripPoint');
-      if (gripPoint) {
-        visual.updateMatrixWorld(true);
-        gripPoint.updateWorldMatrix(true, false);
-        _gripLocal.copy(visual.matrixWorld).invert().multiply(gripPoint.matrixWorld).invert();
-        _gripLocal.decompose(visual.position, visual.quaternion, visual.scale);
-      }
-      anchor.add(visual);
+    const gripPoint = visual.getObjectByName('GripPoint');
+    if (gripPoint) {
+      visual.updateMatrixWorld(true);
+      gripPoint.updateWorldMatrix(true, false);
+      _gripLocal.copy(visual.matrixWorld).invert().multiply(gripPoint.matrixWorld).invert();
+      _gripLocal.decompose(visual.position, visual.quaternion, visual.scale);
     }
 
-    // Loud fallback/locator that is independent of GLB loading and scene lighting.
-    // Leave it on for this test; once the user confirms the motors are visible we
-    // can remove it in one line.
-    const proxy = new Mesh(
-      new BoxGeometry(0.22, 0.16, 0.38),
-      new MeshBasicMaterial({ color: proxyColor, wireframe: true, depthTest: false }),
-    );
-    proxy.name = 'motor-visible-proxy';
-    proxy.renderOrder = 10000;
-    proxy.frustumCulled = false;
-    anchor.add(proxy);
-
+    anchor.add(visual);
     return anchor;
   }
 
@@ -288,6 +306,7 @@ export class HandThrusters {
     if (!motor) return;
     this.scene.attach(motor.root);
     motor.heldBy = null;
+    motor.throttle = 0;
   }
 
   private motorHeldBy(handedness: Handedness): MotorPickup | null {
@@ -306,15 +325,7 @@ export class HandThrusters {
   }
 
   private clearMotors(): void {
-    for (const motor of this.motors) {
-      motor.root.removeFromParent();
-      motor.proxy.geometry.dispose();
-      if (Array.isArray(motor.proxy.material)) {
-        for (const material of motor.proxy.material) material.dispose();
-      } else {
-        motor.proxy.material.dispose();
-      }
-    }
+    for (const motor of this.motors) motor.root.removeFromParent();
     this.motors.length = 0;
   }
 

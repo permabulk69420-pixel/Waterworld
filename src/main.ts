@@ -3,12 +3,13 @@ import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
 import { HandThrusters } from './player/HandThrusters.ts';
+import { Headlamp } from './player/Headlamp.ts';
 import { RearLedgeClimb } from './player/RearLedgeClimb.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V4-LEDGE-CLIMB';
+const BUILD_TAG = 'BUILD-MODE-V5-HEADLAMP';
 
 /**
  * Bootstrap.
@@ -86,6 +87,7 @@ async function bootstrap(): Promise<void> {
 
   let thrusters: HandThrusters | null = null;
   let rearClimb: RearLedgeClimb | null = null;
+  let headlamp: Headlamp | null = null;
   if (mode === 'story') {
     // The ship GLB carries simple COLLIDER_* geometry for its accessible rear
     // section. Install it only in Story mode so Build-mode object movement never
@@ -99,6 +101,8 @@ async function bootstrap(): Promise<void> {
       hands,
       game.locomotion,
     );
+
+    headlamp = new Headlamp(game.scene, game.renderer, game.rig, hands);
 
     thrusters = new HandThrusters(
       game.renderer,
@@ -117,6 +121,7 @@ async function bootstrap(): Promise<void> {
 
   game.addFrameListener((dt) => {
     hands.update(dt);
+    headlamp?.update(dt);
     thrusters?.update(dt);
     // Run after the motors so an anchored hand can cancel propulsion for the
     // current frame while the player physically pulls against the rear ledge.
@@ -124,8 +129,9 @@ async function bootstrap(): Promise<void> {
     authoredWorld.update();
   });
 
-  (window as unknown as { game: Game; build: BuildSystem }).game = game;
-  (window as unknown as { game: Game; build: BuildSystem }).build = authoredWorld;
+  (window as unknown as { game: Game; build: BuildSystem; headlamp: Headlamp | null }).game = game;
+  (window as unknown as { game: Game; build: BuildSystem; headlamp: Headlamp | null }).build = authoredWorld;
+  (window as unknown as { game: Game; build: BuildSystem; headlamp: Headlamp | null }).headlamp = headlamp;
 
   await game.start((progress, label) => {
     bootFill.style.width = `${Math.round(progress * 100)}%`;
@@ -135,7 +141,7 @@ async function bootstrap(): Promise<void> {
   if (mode === 'build') {
     hint.textContent = 'BUILD · left trigger menu · right trigger select/click · grip moves selection · A/X up · B/Y down';
   } else {
-    hint.textContent = 'STORY · rear ship ledge: hold grip near the ledge and pull yourself up';
+    hint.textContent = 'STORY · tap either side of your head with a hand to toggle lamp · rear ledge: hold grip and pull';
   }
 
   boot.classList.add('hidden');

@@ -6,22 +6,22 @@ import type { PlayerConfig } from './playerConfig.ts';
 /**
  * Quest controller input.
  *
- * Mapping (xr-standard gamepad):
- *   left stick   - forward / back / strafe, relative to where you are looking
- *   right stick  - smooth continuous turn (X only; Y is ignored on purpose so
- *                  it cannot fight the head-relative pitch movement)
- *   A / right    - ascend            B / right - descend
- *   right trigger- analog ascend     left trigger - analog descend
- *   either grip  - boost
+ * Keep this intentionally boring and explicit while the locomotion is being tuned:
+ *   left stick   - swim forward/back and strafe
+ *   right stick  - smooth turn (horizontal axis only)
+ *   A / X        - ascend
+ *   B / Y        - descend
+ *   right trigger- analog ascend
+ *   left trigger - analog descend
  *
- * No hand or controller models are attached - that is a later pass. Input is
- * read straight from the WebXR gamepads, so nothing needs to be in the scene
- * graph for movement to work.
+ * Grip boost is deliberately disabled for now. On Touch controllers the squeeze
+ * control is very easy to hold unintentionally, and the old mapping could nearly
+ * double swimming speed just from gripping the controller.
  */
 export class XRInput {
   private readonly intent = createMoveIntent();
 
-  /** Set when at least one controller reported a gamepad this frame. */
+  /** Set when at least one usable left/right controller reported a gamepad. */
   connected = false;
   /** Which hands were seen this frame, for the debug HUD. */
   hands = '';
@@ -48,38 +48,45 @@ export class XRInput {
     let debugToggle = false;
 
     for (const source of session.inputSources) {
+      // Ignore transient/gaze/unknown sources entirely. Only the actual tracked
+      // left and right controllers are allowed to drive locomotion.
+      if (source.handedness !== 'left' && source.handedness !== 'right') continue;
+
       const gamepad = source.gamepad;
       if (!gamepad) continue;
+
       this.connected = true;
       this.hands += this.hands ? `+${source.handedness}` : source.handedness;
 
-      // xr-standard puts the thumbstick on axes 2/3; fall back to 0/1 for
-      // controllers that only expose the legacy touchpad axes.
-      const ax = gamepad.axes.length >= 4 ? gamepad.axes[2] : (gamepad.axes[0] ?? 0);
-      const ay = gamepad.axes.length >= 4 ? gamepad.axes[3] : (gamepad.axes[1] ?? 0);
+      // xr-standard reserves axes 2/3 for the primary thumbstick. Controllers
+      // using a non-standard mapping occasionally expose only one axis pair, so
+      // retain a conservative 0/1 fallback for those devices only.
+      const useStandardStick = gamepad.mapping === 'xr-standard' || gamepad.axes.length >= 4;
+      const ax = useStandardStick ? (gamepad.axes[2] ?? 0) : (gamepad.axes[0] ?? 0);
+      const ay = useStandardStick ? (gamepad.axes[3] ?? 0) : (gamepad.axes[1] ?? 0);
 
       const trigger = gamepad.buttons[0]?.value ?? 0;
-      const grip = gamepad.buttons[1]?.value ?? 0;
       const primary = gamepad.buttons[4]?.pressed ?? false; // A / X
       const secondary = gamepad.buttons[5]?.pressed ?? false; // B / Y
 
-      if (grip > 0.5) intent.boost = Math.max(intent.boost, grip);
-
       if (source.handedness === 'right') {
-        // Turn only from the horizontal axis, with its own deadzone.
-        intent.turn += deadzone1(ax, this.config.turnDeadzone);
+        // Right controller is turn + upward controls only. Vertical stick input
+        // is intentionally ignored so accidental diagonal stick motion cannot
+        // add translation.
+        intent.turn = deadzone1(ax, this.config.turnDeadzone);
         if (primary) ascend = 1;
         if (secondary) descend = 1;
         ascend = Math.max(ascend, trigger);
       } else {
+        // Left controller is translation only.
         const [sx, sy] = applyDeadzone(ax, ay, this.config.moveDeadzone);
-        intent.strafe += sx;
-        intent.forward += -sy; // stick up is -1 in xr-standard
-        // Mirror controls so either hand can drive vertical movement.
+        intent.strafe = sx;
+        intent.forward = -sy; // xr-standard: stick up reports negative Y
+
         if (primary) ascend = 1;
         if (secondary) descend = 1;
         descend = Math.max(descend, trigger);
-        // Left thumbstick click toggles the in-headset debug panel.
+
         if (gamepad.buttons[3]?.pressed) debugToggle = true;
       }
     }
@@ -91,6 +98,7 @@ export class XRInput {
     intent.forward = clamp(intent.forward, -1, 1);
     intent.strafe = clamp(intent.strafe, -1, 1);
     intent.turn = clamp(intent.turn, -1, 1);
+    intent.boost = 0;
     return intent;
   }
 }

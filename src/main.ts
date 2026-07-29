@@ -61,9 +61,10 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  // First biome dressing pass. The boot controls deliberately tune vegetation
-  // independently from terrain so we can find a Quest-friendly sweet spot.
-  const seaGrass = new SeaGrassSystem({
+  // Dense vegetation now lives in one GPU-instanced field attached directly to
+  // the scene. Loaded chunks only contribute deterministic placement records;
+  // the boot sliders still tune density and the short grass render radius.
+  const seaGrass = new SeaGrassSystem(game.scene, {
     densityMultiplier: grassDensityPercent / 100,
     renderDistance: grassRenderDistance,
   });

@@ -12,9 +12,9 @@ export class Lighting {
   private readonly sunsetSunColor = new Color(0xff9b62);
   private readonly deepSunColor = new Color(0x8bc8d2);
   private readonly surfaceSkyColor = new Color(0xb7cdd2);
-  private readonly nightSkyColor = new Color(0x07111d);
+  private readonly nightSkyColor = new Color(0x020711);
   private readonly surfaceGroundColor = new Color(0x81755d);
-  private readonly nightGroundColor = new Color(0x05090d);
+  private readonly nightGroundColor = new Color(0x010305);
   private readonly caveFill = new Color();
   private readonly daySun = new Color();
   private readonly daySky = new Color();
@@ -56,12 +56,12 @@ export class Lighting {
   ): void {
     const attenuation = 1 - 0.44 * depthT;
 
-    // Warm the directional light around sunrise/sunset, then let it collapse almost
-    // completely at night. A tiny floor avoids pitch-black geometry while testing.
     this.daySun.copy(this.sunsetSunColor).lerp(this.surfaceSunColor, daylight);
     this.sun.color.copy(this.daySun).lerp(this.deepSunColor, submergence * 0.7);
     const sunDayIntensity = (2.4 * (1 - submergence) + 1.75 * submergence) * attenuation;
-    this.sun.intensity = 0.025 + sunDayIntensity * daylight;
+    // Nearly no directional light at full night; silhouettes should come from the
+    // very small ambient/sky floor or from player lights, not a fake moon-sun.
+    this.sun.intensity = 0.004 + sunDayIntensity * daylight;
 
     this.daySky.copy(this.nightSkyColor).lerp(this.surfaceSkyColor, twilight);
     this.hemisphere.color.copy(this.daySky).lerp(shallowWater, submergence * 0.72 * twilight);
@@ -73,12 +73,12 @@ export class Lighting {
       .lerp(this.caveFill, submergence * 0.72 * twilight);
 
     const hemiDayIntensity = (1.1 * (1 - submergence) + 0.92 * submergence) * attenuation;
-    this.hemisphere.intensity = 0.045 + hemiDayIntensity * (0.12 + 0.88 * twilight);
+    // Previous night floor was high enough to make the darkness read as foggy blue.
+    // Cut it hard so night is genuinely dark while still avoiding absolute black.
+    this.hemisphere.intensity = 0.012 + hemiDayIntensity * (0.03 + 0.97 * twilight);
 
     this.ambient.color.copy(this.caveFill);
-    // Keep a very small underwater readability floor, but night should still create
-    // a meaningful reason to carry a torch or move to a vehicle with headlights.
-    this.ambient.intensity = submergence * attenuation * (0.035 + 0.485 * daylight);
+    this.ambient.intensity = submergence * attenuation * (0.012 + 0.508 * daylight);
   }
 
   /** Keeps the directional light centred so it never runs out of range. */

@@ -1,9 +1,12 @@
 import {
+  BoxGeometry,
+  DoubleSide,
   Group,
   Matrix4,
+  Mesh,
+  MeshBasicMaterial,
   Quaternion,
   Vector3,
-  type Mesh,
   type Object3D,
   type WebGLRenderer,
 } from 'three';
@@ -25,15 +28,17 @@ const _gripLocal = new Matrix4();
 interface MotorVisual {
   root: Object3D;
   grip: Group;
+  debug: Mesh;
 }
 
 /**
  * Two independent tracked-hand underwater motors.
  *
- * Each trigger contributes a force vector along that motor's actual tracked
- * orientation. The two vectors are summed without normalization, so aligned hands
- * genuinely accelerate harder while opposed hands cancel. Locomotion integrates
- * the result as acceleration and handles drag, collision and the surface cap.
+ * For this integration pass the visuals deliberately attach directly to the raw
+ * WebXR controller grips rather than the animated hand-bone socket. That removes
+ * an entire transform chain while we verify placement and propulsion direction.
+ * A bright wireframe debug body is kept around each motor temporarily so a missing
+ * or badly shaded GLB can never masquerade as an attachment/tracking failure.
  */
 export class HandThrusters {
   readonly ready: Promise<void>;
@@ -59,20 +64,31 @@ export class HandThrusters {
       if (this.disposed) return;
 
       this.template = gltf.scene;
+      this.template.visible = true;
       this.template.traverse((object) => {
-        const mesh = object as Mesh;
-        if (!mesh.isMesh) return;
-        mesh.castShadow = false;
-        mesh.receiveShadow = false;
+        if (!(object instanceof Mesh)) return;
+        object.visible = true;
+        object.castShadow = false;
+        object.receiveShadow = false;
+        object.frustumCulled = false;
+
+        // The uploaded GLB does not carry vertex normals. Generate them once so
+        // its default/PBR material cannot disappear into nearly black underwater lighting.
+        if (!object.geometry.getAttribute('normal')) object.geometry.computeVertexNormals();
+
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) {
+          material.side = DoubleSide;
+          material.needsUpdate = true;
+        }
       });
 
       if (!this.template.getObjectByName('GripPoint')) {
         console.warn('[thrusters] motor has no GripPoint helper; falling back to its scene origin');
       }
     } catch (error) {
-      // Propulsion intentionally still works from the tracked hand orientation if
-      // the GLB is missing. A reload after upload attaches visuals.
-      console.warn(`[thrusters] optional motor visual not found at ${MOTOR_URL}`, error);
+      // Propulsion and the bright debug anchors still work even if the GLB itself fails.
+      console.warn(`[thrusters] motor visual failed to load at ${MOTOR_URL}`, error);
     }
   }
 
@@ -105,10 +121,10 @@ export class HandThrusters {
   }
 
   private getForward(handedness: Handedness, target: Vector3): boolean {
-    // Once the visual exists, derive thrust from the actual mounted motor orientation
-    // so any attachment correction automatically changes the physics too.
+    // Use the mounted motor when available; otherwise use the raw XR grip. Both are
+    // direct children of the tracked grip now, so hand animation cannot alter thrust.
     const visual = this.visuals[handedness];
-    const source = visual?.root ?? this.hands.getObjectGrip(handedness);
+    const source = visual?.root ?? this.hands.getControllerGrip(handedness);
     if (!source) return false;
 
     source.updateWorldMatrix(true, false);
@@ -118,43 +134,70 @@ export class HandThrusters {
   }
 
   private syncVisual(handedness: Handedness): void {
-    const grip = this.hands.getObjectGrip(handedness);
+    const grip = this.hands.getControllerGrip(handedness);
     const current = this.visuals[handedness];
 
     if (!grip) {
-      if (current) current.root.removeFromParent();
+      if (current) this.removeVisual(current);
       this.visuals[handedness] = null;
       return;
     }
 
     if (current?.grip === grip) return;
-    if (current) current.root.removeFromParent();
-    if (!this.template) {
-      this.visuals[handedness] = null;
-      return;
-    }
+    if (current) this.removeVisual(current);
 
-    const root = this.template.clone(true);
+    // Loud temporary diagnostic: if WebXR has supplied a tracked grip, this marker
+    // must be visible even when the uploaded GLB is missing, black, tiny or malformed.
+    const debug = new Mesh(
+      new BoxGeometry(0.14, 0.12, 0.34),
+      new MeshBasicMaterial({
+        color: handedness === 'left' ? 0xff6a00 : 0xff00cc,
+        wireframe: true,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    debug.name = `${handedness}-thruster-debug`;
+    debug.position.set(0, 0, -0.02);
+    debug.renderOrder = 10000;
+    debug.frustumCulled = false;
+    grip.add(debug);
+
+    // Keep a real Object3D even when the GLB failed, so propulsion orientation and
+    // visual diagnosis still share the exact same tracked transform.
+    const root = this.template ? this.template.clone(true) : new Group();
     root.name = `${handedness}-hand-motor`;
+    root.visible = true;
 
-    // The uploaded asset includes a real GripPoint helper rather than putting the
-    // scene origin at the handle. Compute that helper's transform relative to the
-    // cloned scene, invert it, and apply it to the scene root. GripPoint therefore
-    // lands exactly on the hand's held-object socket with no magic centimetre offsets.
-    const gripPoint = root.getObjectByName('GripPoint');
-    if (gripPoint) {
-      root.updateMatrixWorld(true);
-      gripPoint.updateWorldMatrix(true, false);
-      _gripLocal.copy(root.matrixWorld).invert().multiply(gripPoint.matrixWorld).invert();
-      _gripLocal.decompose(root.position, root.quaternion, root.scale);
-    } else {
-      root.position.set(0, 0, 0);
-      root.quaternion.identity();
-      root.scale.set(1, 1, 1);
+    if (this.template) {
+      // GripPoint in the uploaded model is offset from the scene origin. Invert its
+      // local transform so that helper lands exactly at the controller grip origin.
+      const gripPoint = root.getObjectByName('GripPoint');
+      if (gripPoint) {
+        root.updateMatrixWorld(true);
+        gripPoint.updateWorldMatrix(true, false);
+        _gripLocal.copy(root.matrixWorld).invert().multiply(gripPoint.matrixWorld).invert();
+        _gripLocal.decompose(root.position, root.quaternion, root.scale);
+      } else {
+        root.position.set(0, 0, 0);
+        root.quaternion.identity();
+        root.scale.set(1, 1, 1);
+      }
     }
 
     grip.add(root);
-    this.visuals[handedness] = { root, grip };
+    this.visuals[handedness] = { root, grip, debug };
+  }
+
+  private removeVisual(visual: MotorVisual): void {
+    visual.root.removeFromParent();
+    visual.debug.removeFromParent();
+    visual.debug.geometry.dispose();
+    if (Array.isArray(visual.debug.material)) {
+      for (const material of visual.debug.material) material.dispose();
+    } else {
+      visual.debug.material.dispose();
+    }
   }
 
   dispose(): void {
@@ -162,19 +205,19 @@ export class HandThrusters {
     this.locomotion.clearPropulsionInput();
 
     for (const handedness of ['left', 'right'] as const) {
-      this.visuals[handedness]?.root.removeFromParent();
+      const visual = this.visuals[handedness];
+      if (visual) this.removeVisual(visual);
       this.visuals[handedness] = null;
     }
 
     // Both visible copies share resources with this source scene, so dispose once.
     this.template?.traverse((object) => {
-      const mesh = object as Mesh;
-      if (!mesh.isMesh) return;
-      mesh.geometry.dispose();
-      if (Array.isArray(mesh.material)) {
-        for (const material of mesh.material) material.dispose();
+      if (!(object instanceof Mesh)) return;
+      object.geometry.dispose();
+      if (Array.isArray(object.material)) {
+        for (const material of object.material) material.dispose();
       } else {
-        mesh.material.dispose();
+        object.material.dispose();
       }
     });
     this.template = null;

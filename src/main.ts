@@ -5,7 +5,7 @@ import { HandThrusters } from './player/HandThrusters.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 
-const BUILD_TAG = 'MOTOR-XR-V4';
+const BUILD_TAG = 'MOTOR-XR-V5';
 
 /**
  * Bootstrap.
@@ -86,10 +86,11 @@ async function bootstrap(): Promise<void> {
 
   game.xrInput.setTriggerVerticalEnabled(false);
 
-  // Hands, pickups and propulsion run on the game's one authoritative XR frame.
+  // Hands, pickups, propeller animation and propulsion all use the game's one
+  // authoritative XR frame and the same dt.
   game.addFrameListener((dt) => {
     hands.update(dt);
-    thrusters.update();
+    thrusters.update(dt);
   });
 
   (window as unknown as { game: Game }).game = game;

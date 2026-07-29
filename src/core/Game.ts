@@ -36,6 +36,8 @@ export interface GameOptions {
   debug?: boolean;
 }
 
+export type GameFrameListener = (dt: number, elapsed: number) => void;
+
 const _head = new Vector3();
 const _headQuat = new Quaternion();
 const _rescue = new Vector3();
@@ -72,6 +74,7 @@ export class Game {
 
   private readonly timer = new FrameTimer();
   private readonly terrainMaterial: MeshStandardMaterial;
+  private readonly frameListeners = new Set<GameFrameListener>();
   private stuckTime = 0;
   private fps = 60;
   private frameMs = 16;
@@ -149,6 +152,15 @@ export class Game {
   }
 
   /**
+   * Adds a lightweight per-frame system to the same authoritative Three/WebXR
+   * animation loop as locomotion and rendering. Returns an unsubscribe callback.
+   */
+  addFrameListener(listener: GameFrameListener): () => void {
+    this.frameListeners.add(listener);
+    return () => this.frameListeners.delete(listener);
+  }
+
+  /**
    * Generates the starting chunks, places the player and starts the loop.
    * @param onProgress 0..1
    */
@@ -209,6 +221,10 @@ export class Game {
       intent = this.desktopInput.poll(true);
       extraYaw = this.desktopInput.consumeYawDelta();
     }
+
+    // External player systems (hands, held props, propulsion) run here so they
+    // see the same XR pose and can update locomotion input before simulation.
+    for (const listener of this.frameListeners) listener(dt, elapsed);
 
     // --- simulate --------------------------------------------------------
     // Locomotion uses the exact same animated wave height as the ocean shader.
@@ -316,6 +332,7 @@ export class Game {
 
   dispose(): void {
     this.renderer.setAnimationLoop(null);
+    this.frameListeners.clear();
     this.chunks.dispose();
     this.environment.dispose();
     this.overlays.dispose();

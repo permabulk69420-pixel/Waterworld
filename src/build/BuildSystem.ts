@@ -33,6 +33,8 @@ interface BuildAssetDefinition {
   url: string;
   scale?: number;
   spawnDistance?: number;
+  /** Optional absolute world Y for assets whose origin has semantic meaning, e.g. a ship waterline. */
+  spawnY?: number;
 }
 
 interface PlacedObjectRecord {
@@ -130,12 +132,12 @@ function isAssetCatalog(value: unknown): value is BuildAssetDefinition[] {
 }
 
 /**
- * Authored-object layer shared by Story and Build modes.
+ * Loads hand-authored world objects in both Story and Build modes.
  *
- * The repository is the only GLB source. Build mode simply enables placement
- * tools over the same authored layer Story mode loads. Hold left trigger for
- * the in-world menu, point/click with right trigger, and use either grip to
- * physically move the selected object.
+ * Build mode adds a deliberately small VR editor on top: hold the left trigger
+ * to open the panel, point/click with the right trigger, and use either grip to
+ * physically move the selected object. The repo remains the source of GLBs;
+ * there is intentionally no browser/device file picker.
  */
 export class BuildSystem {
   readonly ready: Promise<void>;
@@ -155,12 +157,13 @@ export class BuildSystem {
   private grabbedBy: Handedness | null = null;
 
   private readonly selectionBox = new BoxHelper(new Object3D(), 0x65e7ff);
+
   private readonly panelCanvas = document.createElement('canvas');
   private readonly panelTexture: CanvasTexture;
   private readonly panelMesh: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private readonly panelRoot = new Group();
   private readonly panelButtons: PanelButton[] = [];
-  private readonly pointerLine: Line<BufferGeometry, LineBasicMaterial>;
+  private readonly pointerLine: Line;
 
   private leftTriggerHeld = false;
   private rightTriggerHeld = false;
@@ -169,7 +172,7 @@ export class BuildSystem {
   private status = 'ready';
 
   constructor(
-    scene: Scene,
+    private readonly scene: Scene,
     private readonly renderer: WebGLRenderer,
     private readonly rig: PlayerRig,
     private readonly hands: VRHands,
@@ -180,25 +183,24 @@ export class BuildSystem {
 
     this.selectionBox.name = 'build-selection-box';
     this.selectionBox.visible = false;
-    this.selectionBox.material.depthTest = false;
-    this.selectionBox.material.transparent = true;
-    this.selectionBox.material.opacity = 0.9;
+    const boxMaterial = this.selectionBox.material as LineBasicMaterial;
+    boxMaterial.depthTest = false;
+    boxMaterial.transparent = true;
+    boxMaterial.opacity = 0.9;
     this.selectionBox.renderOrder = 999;
     scene.add(this.selectionBox);
 
     this.panelCanvas.width = PANEL_WIDTH_PX;
     this.panelCanvas.height = PANEL_HEIGHT_PX;
     this.panelTexture = new CanvasTexture(this.panelCanvas);
-    this.panelMesh = new Mesh(
-      new PlaneGeometry(PANEL_WORLD_WIDTH, PANEL_WORLD_HEIGHT),
-      new MeshBasicMaterial({
-        map: this.panelTexture,
-        transparent: true,
-        side: DoubleSide,
-        depthTest: false,
-        depthWrite: false,
-      }),
-    );
+    const panelMaterial = new MeshBasicMaterial({
+      map: this.panelTexture,
+      transparent: true,
+      side: DoubleSide,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.panelMesh = new Mesh(new PlaneGeometry(PANEL_WORLD_WIDTH, PANEL_WORLD_HEIGHT), panelMaterial);
     this.panelMesh.name = 'build-panel';
     this.panelMesh.renderOrder = 1001;
     this.panelRoot.name = 'build-panel-root';
@@ -210,15 +212,13 @@ export class BuildSystem {
       new Vector3(0, 0, 0),
       new Vector3(0, 0, -3),
     ]);
-    this.pointerLine = new Line(
-      pointerGeometry,
-      new LineBasicMaterial({
-        color: 0x70e8ff,
-        depthTest: false,
-        transparent: true,
-        opacity: 0.8,
-      }),
-    );
+    const pointerMaterial = new LineBasicMaterial({
+      color: 0x70e8ff,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.8,
+    });
+    this.pointerLine = new Line(pointerGeometry, pointerMaterial);
     this.pointerLine.name = 'build-ui-pointer';
     this.pointerLine.visible = false;
     this.pointerLine.renderOrder = 1002;
@@ -544,11 +544,12 @@ export class BuildSystem {
 
     this.status = `loading ${asset.label}`;
     this.drawPanel();
+
     _forward.set(0, 0, -1).applyQuaternion(_headQuat);
     if (_forward.lengthSq() < 0.001) _forward.set(0, 0, -1);
     _forward.normalize();
-
     const position = _head.clone().addScaledVector(_forward, asset.spawnDistance ?? 2.2);
+    if (asset.spawnY !== undefined) position.y = asset.spawnY;
     const uniformScale = asset.scale ?? 1;
     const record: PlacedObjectRecord = {
       id: newId(),
@@ -634,10 +635,10 @@ export class BuildSystem {
   }
 
   private currentLayout(): LayoutFile {
-    const objects: PlacedObjectRecord[] = [];
+    const records: PlacedObjectRecord[] = [];
     for (const runtime of this.objects.values()) {
       if (runtime.record.id !== this.grabbedId) this.syncRecord(runtime);
-      objects.push({
+      records.push({
         id: runtime.record.id,
         assetId: runtime.record.assetId,
         position: copyVec3(runtime.record.position),
@@ -645,7 +646,7 @@ export class BuildSystem {
         scale: copyVec3(runtime.record.scale),
       });
     }
-    return { version: 1, objects };
+    return { version: 1, objects: records };
   }
 
   private saveLocalLayout(): void {
@@ -677,7 +678,7 @@ export class BuildSystem {
     try {
       localStorage.removeItem(LOCAL_LAYOUT_KEY);
     } catch {
-      // Published layout still reloads for this session if storage is restricted.
+      // Ignore restricted storage; published layout still reloads for this session.
     }
     await this.loadLayout(this.publishedLayout);
     this.status = 'reset to GitHub layout';
@@ -700,7 +701,7 @@ export class BuildSystem {
     ctx.font = '22px monospace';
     ctx.fillStyle = '#83dbea';
     ctx.fillText('Hold LEFT trigger to keep this panel open', 34, 98);
-    ctx.fillText('RIGHT trigger: click/select   GRIP: move selection', 34, 132);
+    ctx.fillText('RIGHT trigger: click / select   GRIP: move selection', 34, 132);
 
     const asset = this.catalog[this.assetIndex];
     const selected = this.selectedRuntime();
@@ -722,29 +723,29 @@ export class BuildSystem {
     const full = PANEL_WIDTH_PX - left * 2;
     const third = (full - gap * 2) / 3;
     const half = (full - gap) / 2;
-    const height = 74;
+    const h = 74;
     let y = 310;
 
-    this.addPanelButton(ctx, '< ASSET', 'asset-prev', left, y, third, height);
-    this.addPanelButton(ctx, 'SPAWN', 'spawn', left + third + gap, y, third, height);
-    this.addPanelButton(ctx, 'ASSET >', 'asset-next', left + (third + gap) * 2, y, third, height);
-    y += height + gap;
+    this.addPanelButton(ctx, '< ASSET', 'asset-prev', left, y, third, h);
+    this.addPanelButton(ctx, 'SPAWN', 'spawn', left + third + gap, y, third, h);
+    this.addPanelButton(ctx, 'ASSET >', 'asset-next', left + (third + gap) * 2, y, third, h);
+    y += h + gap;
 
-    this.addPanelButton(ctx, 'ROT -15°', 'rotate-left', left, y, half, height);
-    this.addPanelButton(ctx, 'ROT +15°', 'rotate-right', left + half + gap, y, half, height);
-    y += height + gap;
+    this.addPanelButton(ctx, 'ROT -15°', 'rotate-left', left, y, half, h);
+    this.addPanelButton(ctx, 'ROT +15°', 'rotate-right', left + half + gap, y, half, h);
+    y += h + gap;
 
-    this.addPanelButton(ctx, 'SCALE -', 'scale-down', left, y, half, height);
-    this.addPanelButton(ctx, 'SCALE +', 'scale-up', left + half + gap, y, half, height);
-    y += height + gap;
+    this.addPanelButton(ctx, 'SCALE -', 'scale-down', left, y, half, h);
+    this.addPanelButton(ctx, 'SCALE +', 'scale-up', left + half + gap, y, half, h);
+    y += h + gap;
 
-    this.addPanelButton(ctx, 'DUPLICATE', 'duplicate', left, y, half, height);
-    this.addPanelButton(ctx, 'DELETE', 'delete', left + half + gap, y, half, height, true);
-    y += height + gap;
+    this.addPanelButton(ctx, 'DUPLICATE', 'duplicate', left, y, half, h);
+    this.addPanelButton(ctx, 'DELETE', 'delete', left + half + gap, y, half, h, true);
+    y += h + gap;
 
-    this.addPanelButton(ctx, 'COPY LAYOUT JSON', 'copy', left, y, full, height);
-    y += height + gap;
-    this.addPanelButton(ctx, 'RESET TO GITHUB LAYOUT', 'reset', left, y, full, height, true);
+    this.addPanelButton(ctx, 'COPY LAYOUT JSON', 'copy', left, y, full, h);
+    y += h + gap;
+    this.addPanelButton(ctx, 'RESET TO GITHUB LAYOUT', 'reset', left, y, full, h, true);
 
     ctx.font = '18px monospace';
     ctx.fillStyle = '#658993';
@@ -782,13 +783,13 @@ export class BuildSystem {
     this.root.removeFromParent();
     this.selectionBox.removeFromParent();
     this.selectionBox.geometry.dispose();
-    this.selectionBox.material.dispose();
+    (this.selectionBox.material as LineBasicMaterial).dispose();
     this.panelRoot.removeFromParent();
     this.panelMesh.geometry.dispose();
     this.panelMesh.material.dispose();
     this.panelTexture.dispose();
     this.pointerLine.removeFromParent();
     this.pointerLine.geometry.dispose();
-    this.pointerLine.material.dispose();
+    (this.pointerLine.material as LineBasicMaterial).dispose();
   }
 }

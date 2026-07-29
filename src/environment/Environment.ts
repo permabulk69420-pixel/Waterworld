@@ -9,11 +9,10 @@ import { saturate, smoothstep } from '../math/mathUtils.ts';
 /**
  * Ties the sky, ocean, lighting and fog into one "where am I" state.
  *
- * Underwater visibility is done entirely with exponential fog whose colour and
- * density both track depth - no post-processing pass, which matters because a
- * fullscreen pass on Quest costs more than the entire terrain draw. Crossing
- * the surface swaps fog and lighting over a ~0.5 m band: fast enough to read as
- * a distinct transition, slow enough not to strobe on a wave crest.
+ * Underwater visibility stays on cheap exponential fog for Quest. The shallow
+ * colour is deliberately lifted toward a sunlit green-teal rather than using
+ * the raw water colour as the entire scene background; otherwise terrain,
+ * distant water and shadow all collapse into one blue slab.
  */
 export class Environment {
   readonly sky: Sky;
@@ -29,6 +28,7 @@ export class Environment {
   private readonly airFogColor = new Color(0xb9c9cd);
   private readonly shallowWater = new Color();
   private readonly deepWater = new Color();
+  private readonly sunlitWater = new Color(0x72b5ae);
   private readonly tmpColor = new Color();
   private fogDensityShallow = 0.016;
   private fogDensityDeep = 0.038;
@@ -84,21 +84,25 @@ export class Environment {
     this.submergence = smoothstep(surfaceY + 0.22, surfaceY - 0.28, cameraPosition.y);
 
     const depthT = saturate(this.depth / this.maxDepth);
+    const depthColorT = Math.pow(depthT, 1.45);
 
-    // Fog colour: air -> shallow water -> deep water.
-    this.tmpColor.copy(this.shallowWater).lerp(this.deepWater, depthT * depthT);
+    // Near the surface, borrow a little warm green daylight so the world does
+    // not become uniformly cyan. Fade naturally into the biome's deep colour.
+    this.tmpColor.copy(this.shallowWater);
+    this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24);
+    this.tmpColor.lerp(this.deepWater, depthColorT);
     this.tmpColor.lerp(this.airFogColor, 1 - this.submergence);
     this.fog.color.copy(this.tmpColor);
     if (this.scene.background instanceof Color) this.scene.background.copy(this.tmpColor);
 
-    // Fog density: near-clear air, progressively murkier water.
+    // Clear starting shallows; deeper water still closes in progressively.
     const waterDensity =
-      this.fogDensityShallow + (this.fogDensityDeep - this.fogDensityShallow) * depthT;
+      this.fogDensityShallow + (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
     this.fog.density = 0.0016 + (waterDensity - 0.0016) * this.submergence;
 
     this.lighting.update(this.submergence, depthT, this.shallowWater, this.deepWater);
     this.lighting.follow(cameraPosition);
-    this.sky.setExposure(1 - 0.55 * this.submergence);
+    this.sky.setExposure(1 - 0.5 * this.submergence);
     this.sky.setFogBlend(this.tmpColor, this.submergence);
     this.sky.followCamera(cameraPosition);
     this.ocean.update(elapsed, cameraPosition, this.submergence > 0.5);

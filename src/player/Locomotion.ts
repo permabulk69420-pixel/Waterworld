@@ -39,6 +39,7 @@ export class Locomotion {
 
   private turnRate = 0;
   private swimming = true;
+  private externalClimbActive = false;
   /** Sum of the two tracked hand-motor directions, each weighted 0..1 by trigger. */
   private readonly propulsionInput = new Vector3();
 
@@ -72,6 +73,19 @@ export class Locomotion {
   }
 
   /**
+   * Used by deliberate hand-over-hand climbing interactions. While active, normal
+   * swim/walk acceleration and the ocean-surface head clamp stand down, but the
+   * player capsule still resolves against world collision every frame.
+   */
+  setExternalClimbActive(active: boolean): void {
+    this.externalClimbActive = active;
+    if (active) {
+      this.velocity.set(0, 0, 0);
+      this.clearPropulsionInput();
+    }
+  }
+
+  /**
    * @param surfaceY Local animated ocean height at the player. Omit only for
    * legacy/debug callers that intentionally want unrestricted swimming.
    */
@@ -84,6 +98,16 @@ export class Locomotion {
     this.turnRate = damp(this.turnRate, targetTurnRate, cfg.turnSmoothing, dt);
     const yaw = this.turnRate * dt + extraYaw;
     if (Math.abs(yaw) > 1e-7) this.rig.rotateAroundHead(yaw);
+
+    // Hand-over-hand climbing owns translation while a hand is anchored. Keep
+    // collision alive, but do not let swimming, gravity or the surface clamp undo
+    // the physical pull that was applied earlier in the frame.
+    if (this.externalClimbActive) {
+      this.velocity.set(0, 0, 0);
+      this.clearPropulsionInput();
+      this.move(dt);
+      return;
+    }
 
     this.rig.getHeadPosition(_head);
 
@@ -274,6 +298,7 @@ export class Locomotion {
   teleport(position: Vector3): void {
     this.velocity.set(0, 0, 0);
     this.turnRate = 0;
+    this.externalClimbActive = false;
     this.clearPropulsionInput();
     this.rig.setHeadPosition(position);
   }

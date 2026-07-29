@@ -71,10 +71,11 @@ export const DEFAULT_PLAYER_CONFIG: PlayerConfig = {
   deceleration: 4.5,
   drag: 0.5,
 
-  // Each trigger drives one physical hand direction. Two aligned motors therefore
-  // accelerate roughly twice as hard, but the velocity cap keeps testing sane.
-  propulsionAcceleration: 12,
-  propulsionMaxSpeed: 7.5,
+  // User test pass: make the handheld propulsion materially fast. One motor now
+  // contributes 3x the previous acceleration and the velocity ceiling is also 3x,
+  // so the extra power is not immediately flattened by the old cap.
+  propulsionAcceleration: 36,
+  propulsionMaxSpeed: 22.5,
 
   // At the surface the player remains a swimmer, with their eyes just above the
   // local animated wave. Once terrain physically lifts them well clear of the

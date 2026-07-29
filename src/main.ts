@@ -73,19 +73,23 @@ async function bootstrap(): Promise<void> {
   settings.setStatus('loading shallow vegetation');
   await seaGrass.ready;
 
-  // Load both the visible hands and the motor GLB before the game becomes playable.
-  // Previously these loaded in the background and the XR loop had to eventually
-  // reconcile the two; waiting here removes that race completely.
   const hands = new VRHands(game.renderer, game.rig.group);
   settings.setStatus('loading VR hands');
   await hands.ready;
 
-  const thrusters = new HandThrusters(game.renderer, hands, game.locomotion);
+  // Motors are now ordinary physical pickups rather than magically appearing on
+  // the hands. Grip/squeeze grabs the nearest motor; trigger runs the held motor.
+  const thrusters = new HandThrusters(
+    game.renderer,
+    hands,
+    game.locomotion,
+    game.scene,
+    game.rig,
+  );
   settings.setStatus('loading hand motors');
   await thrusters.ready;
 
-  // Triggers now belong to the two hand motors. A/X and B/Y remain available for
-  // ordinary manual ascend/descend when the player is not using the motors.
+  // Triggers belong only to held motors. A/X and B/Y remain manual vertical swim.
   game.xrInput.setTriggerVerticalEnabled(false);
 
   let handLastFrameMs = 0;
@@ -121,6 +125,10 @@ async function bootstrap(): Promise<void> {
     bootFill.style.width = `${Math.round(progress * 100)}%`;
     settings.setStatus(label);
   });
+
+  // Game.start() establishes the real player spawn, so place the two motor props
+  // afterwards: about a metre in front of the player's face and slightly lower.
+  thrusters.spawnNearPlayer();
 
   boot.classList.add('hidden');
   setTimeout(() => boot.remove(), 800);

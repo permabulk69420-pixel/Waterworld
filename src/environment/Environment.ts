@@ -3,6 +3,7 @@ import { Sky } from './Sky.ts';
 import { Ocean } from './Ocean.ts';
 import { Lighting } from './Lighting.ts';
 import { LightShafts } from './LightShafts.ts';
+import { SurfaceOptics } from './SurfaceOptics.ts';
 import { TerrainCaustics } from './TerrainCaustics.ts';
 import type { WorldConfig } from '../config/worldConfig.ts';
 import type { BiomeRegistry } from '../config/biomes/index.ts';
@@ -21,6 +22,7 @@ export class Environment {
   readonly ocean: Ocean;
   readonly lighting: Lighting;
   readonly shafts: LightShafts;
+  readonly surfaceOptics: SurfaceOptics;
 
   /** 0 = fully above water, 1 = fully submerged. */
   submergence = 0;
@@ -51,6 +53,7 @@ export class Environment {
       rings: 56,
       segments: 96,
     });
+    this.surfaceOptics = new SurfaceOptics(config.seaLevel);
     this.shafts = new LightShafts(config.seaLevel, this.lighting.sunDirection);
 
     this.fog = new FogExp2(this.airFogColor.getHex(), 0.0016);
@@ -60,10 +63,12 @@ export class Environment {
     scene.add(this.sky.mesh);
     scene.add(this.lighting.root);
     scene.add(this.ocean.mesh);
+    scene.add(this.surfaceOptics.mesh);
     scene.add(this.shafts.root);
 
     this.sky.setSunDirection(this.lighting.sunDirection);
     this.ocean.setSunDirection(this.lighting.sunDirection);
+    this.surfaceOptics.setSunDirection(this.lighting.sunDirection);
     this.applyBiome(biomes);
   }
 
@@ -76,6 +81,7 @@ export class Environment {
     this.fogDensityDeep = v.fogDensityDeep;
     this.maxDepth = biomes.biomeAt(x, z).terrain.maxDepth;
     this.ocean.setColors(this.shallowWater, this.deepWater, this.sky.horizonColor);
+    this.surfaceOptics.setColors(this.shallowWater, this.sky.horizonColor);
   }
 
   /**
@@ -118,6 +124,7 @@ export class Environment {
     this.sky.setFogBlend(this.tmpColor, this.submergence);
     this.sky.followCamera(cameraPosition);
     this.ocean.update(elapsed, cameraPosition, this.submergence > 0.5);
+    this.surfaceOptics.update(elapsed, cameraPosition, this.submergence > 0.5);
     this.shafts.update(elapsed, cameraPosition, this.submergence, this.depth, this.shallowWater);
   }
 
@@ -146,6 +153,7 @@ export class Environment {
   dispose(): void {
     this.sky.dispose();
     this.ocean.dispose();
+    this.surfaceOptics.dispose();
     this.lighting.dispose();
     this.shafts.dispose();
   }

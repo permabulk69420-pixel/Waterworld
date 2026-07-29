@@ -1,6 +1,7 @@
 import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
+import { HandThrusters } from './player/HandThrusters.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 
@@ -72,21 +73,30 @@ async function bootstrap(): Promise<void> {
   settings.setStatus('loading shallow vegetation');
   await seaGrass.ready;
 
-  // Reuse the apartment project's rigged hands. VRHands creates the tracked
-  // controller/grip nodes under Waterworld's existing player rig.
+  // Reuse the apartment project's rigged hands. The motor system attaches its
+  // optional visual GLB to the existing palm-held-object sockets and derives force
+  // from those real tracked transforms, so the physics follows where each hand points.
   const hands = new VRHands(game.renderer, game.rig.group);
+  const thrusters = new HandThrusters(game.renderer, hands, game.locomotion);
+
+  // Triggers now belong to the two hand motors. A/X and B/Y remain available for
+  // ordinary manual ascend/descend when the player is not using the motors.
+  game.xrInput.setTriggerVerticalEnabled(false);
+
   let handLastFrameMs = 0;
 
   const updateHands = (timeMs: number): void => {
     const session = game.renderer.xr.getSession();
     if (!session) {
       handLastFrameMs = 0;
+      game.locomotion.clearPropulsionInput();
       return;
     }
 
     const dt = handLastFrameMs === 0 ? 0 : Math.min((timeMs - handLastFrameMs) / 1000, 0.05);
     handLastFrameMs = timeMs;
     hands.update(dt);
+    thrusters.update();
     session.requestAnimationFrame(updateHands);
   };
 
@@ -96,6 +106,7 @@ async function bootstrap(): Promise<void> {
   });
   game.renderer.xr.addEventListener('sessionend', () => {
     handLastFrameMs = 0;
+    game.locomotion.clearPropulsionInput();
   });
 
   // Handy for poking at the world from the browser console.

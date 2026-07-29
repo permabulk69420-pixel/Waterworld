@@ -1,6 +1,6 @@
 import {
   ACESFilmicToneMapping,
-  MeshStandardMaterial,
+  type MeshStandardMaterial,
   PerspectiveCamera,
   Quaternion,
   Scene,
@@ -16,6 +16,7 @@ import { ChunkManager } from '../world/ChunkManager.ts';
 import { CollisionWorld } from '../physics/CollisionWorld.ts';
 import { ContentRegistry } from '../content/ContentRegistry.ts';
 import { Environment } from '../environment/Environment.ts';
+import { createTerrainMaterial, disposeTerrainMaterial } from '../environment/TerrainMaterial.ts';
 import { PlayerRig } from '../player/PlayerRig.ts';
 import { Locomotion } from '../player/Locomotion.ts';
 import { XRInput } from '../player/XRInput.ts';
@@ -113,13 +114,7 @@ export class Game {
     this.density = new DensityField(this.worldConfig.seed, this.biomes);
     this.content = new ContentRegistry(this.density, this.worldConfig.seed);
 
-    this.terrainMaterial = new MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.94,
-      metalness: 0.0,
-      flatShading: false,
-      dithering: true,
-    });
+    this.terrainMaterial = createTerrainMaterial(this.renderer, this.worldConfig.seaLevel);
 
     this.chunks = new ChunkManager(
       this.worldConfig,
@@ -316,7 +311,7 @@ export class Game {
     this.overlays.dispose();
     this.vrPanel.dispose();
     this.desktopInput.dispose();
-    this.terrainMaterial.dispose();
+    disposeTerrainMaterial(this.terrainMaterial);
     this.renderer.dispose();
   }
 }

@@ -16,10 +16,10 @@ const ASSET_URL = './assets/biomes/safe-shallows/tropical_seagrass_lush_animated
 /**
  * First vegetation pass for the Safe Shallows.
  *
- * The GLB is loaded once, then lightweight scene clones are scattered
- * deterministically per chunk. Geometry/material GPU resources are shared between
- * clones, while each patch gets its own morph animation state so the supplied
- * SeaGrass_Sway clip can start at a different phase.
+ * The GLB is loaded once, then scene clones are scattered deterministically per
+ * chunk. For this first test each patch owns cloned geometry/material resources,
+ * which keeps the existing chunk disposal path completely safe. Once the look is
+ * approved we can move dense fields to shared/instanced shader vegetation.
  */
 export class SeaGrassSystem implements ContentPopulator {
   readonly id = 'safe-shallows-seagrass-v1';
@@ -45,8 +45,6 @@ export class SeaGrassSystem implements ContentPopulator {
       this.template = gltf.scene;
       this.swayClip = gltf.animations.find((clip) => clip.name === 'SeaGrass_Sway') ?? gltf.animations[0] ?? null;
 
-      // Clones intentionally share the source GLB's geometry and materials. Tell
-      // chunk cleanup not to dispose those shared GPU resources on every unload.
       this.template.traverse((object) => {
         const mesh = object as Mesh;
         if (!mesh.isMesh) return;
@@ -66,9 +64,9 @@ export class SeaGrassSystem implements ContentPopulator {
     if (!this.template || this.loadFailed) return;
 
     const density = ctx.biome.spawnDensity.vegetation;
-    const chunkArea = ctx.bounds.max.x - ctx.bounds.min.x;
+    const chunkWidth = ctx.bounds.max.x - ctx.bounds.min.x;
     const chunkDepth = ctx.bounds.max.z - ctx.bounds.min.z;
-    const targetCount = Math.max(0, Math.round((chunkArea * chunkDepth * density) / 100));
+    const targetCount = Math.max(0, Math.round((chunkWidth * chunkDepth * density) / 100));
     if (targetCount === 0) return;
 
     // Ask for extra candidates because this first grass species only likes the
@@ -98,7 +96,14 @@ export class SeaGrassSystem implements ContentPopulator {
         if (!mesh.isMesh) return;
         mesh.castShadow = false;
         mesh.receiveShadow = false;
-        object.userData.sharedAssetResources = true;
+        // ContentRegistry disposes chunk content on unload. Give each test patch
+        // its own resources so unloading one chunk cannot invalidate another.
+        mesh.geometry = mesh.geometry.clone();
+        if (Array.isArray(mesh.material)) {
+          mesh.material = mesh.material.map((material) => material.clone());
+        } else {
+          mesh.material = mesh.material.clone();
+        }
       });
 
       ctx.group.add(patch);
@@ -141,8 +146,6 @@ export class SeaGrassSystem implements ContentPopulator {
     }
     this.mixersByChunk.clear();
 
-    // The chunk clones shared these resources, so dispose the source exactly once
-    // when the whole game shuts down.
     this.template?.traverse((object) => {
       const mesh = object as Mesh;
       if (!mesh.isMesh) return;

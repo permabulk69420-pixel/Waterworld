@@ -291,6 +291,12 @@ export class VRHands {
     return state?.objectGrip ?? null;
   }
 
+  /** Returns the raw tracked XR grip, bypassing the animated hand skeleton. */
+  getControllerGrip(handedness: Handedness): Group | null {
+    const state = this.states.find((item) => item.handedness === handedness);
+    return state?.grip ?? null;
+  }
+
   getIndexTipWorldPosition(handedness: Handedness, target: Vector3): boolean {
     const state = this.states.find((item) => item.handedness === handedness);
     if (!state?.indexTip) return false;

@@ -1,11 +1,11 @@
 import { BackSide, Color, Mesh, ShaderMaterial, SphereGeometry, Vector3 } from 'three';
 
 /**
- * Neutral placeholder sky.
+ * Neutral procedural sky dome.
  *
- * Deliberately boring: a plain zenith-to-horizon gradient with a soft sun.
- * No alien art direction - that is a later pass. This exists so the world has
- * a believable "up" and a light source that matches the directional light.
+ * Environment owns the time-of-day state and feeds this dome a moving sun plus a
+ * continuously blended zenith/horizon palette. Keeping it shader-only is cheap on
+ * Quest while still giving sunrise, daylight, dusk and a properly dark night.
  */
 export class Sky {
   readonly mesh: Mesh;
@@ -31,7 +31,7 @@ export class Sky {
           vWorldDirection = normalize((modelMatrix * vec4(position, 0.0)).xyz);
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
           gl_Position = projectionMatrix * mvPosition;
-          gl_Position.z = gl_Position.w; // always at the far plane
+          gl_Position.z = gl_Position.w;
         }
       `,
       fragmentShader: /* glsl */ `
@@ -50,19 +50,13 @@ export class Sky {
           float t = pow(clamp(dir.y, 0.0, 1.0), 0.55);
           vec3 col = mix(uHorizon, uZenith, t);
 
-          // Slightly darker below the horizon so the waterline reads clearly
-          // from above the surface.
           col *= mix(0.72, 1.0, smoothstep(0.42, 0.55, h));
 
           float sun = max(dot(dir, normalize(uSunDirection)), 0.0);
-          col += uSunColor * pow(sun, 900.0) * 12.0;      // disc
-          col += uSunColor * pow(sun, 12.0) * 0.10;       // haze around it
+          col += uSunColor * pow(sun, 900.0) * 12.0;
+          col += uSunColor * pow(sun, 12.0) * 0.10;
 
           col *= uExposure;
-
-          // The dome sits at infinity and carries no scene fog of its own, so
-          // underwater it has to be blended out by hand - otherwise it shows
-          // through wherever the ocean disc does not cover the horizon.
           col = mix(col, uFogColor, uFogAmount);
 
           gl_FragColor = vec4(col, 1.0);
@@ -88,18 +82,21 @@ export class Sky {
     (this.material.uniforms.uSunDirection.value as Vector3).copy(dir).normalize();
   }
 
-  /** Dim the sky as the player descends so the surface stays a strong cue. */
+  setPalette(zenith: Color, horizon: Color, sun: Color): void {
+    (this.material.uniforms.uZenith.value as Color).copy(zenith);
+    (this.material.uniforms.uHorizon.value as Color).copy(horizon);
+    (this.material.uniforms.uSunColor.value as Color).copy(sun);
+  }
+
   setExposure(value: number): void {
     this.material.uniforms.uExposure.value = value;
   }
 
-  /** Blends the dome toward the scene fog colour (1 = fully replaced). */
   setFogBlend(color: Color, amount: number): void {
     (this.material.uniforms.uFogColor.value as Color).copy(color);
     this.material.uniforms.uFogAmount.value = amount;
   }
 
-  /** Keeps the dome centred on the camera without any matrix maths per vertex. */
   followCamera(position: Vector3): void {
     this.mesh.position.copy(position);
     this.mesh.updateMatrix();

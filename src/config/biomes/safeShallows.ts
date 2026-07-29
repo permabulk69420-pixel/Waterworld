@@ -63,12 +63,17 @@ export const SAFE_SHALLOWS: BiomeConfig = {
   },
 
   visuals: {
-    terrainShallowColor: 0xbdb49a,
-    terrainDeepColor: 0x6d7b7d,
-    terrainSlopeColor: 0x8a8d8c,
-    waterShallowColor: 0x2f7f92,
-    waterDeepColor: 0x0a2b3d,
-    fogDensityShallow: 0.016,
-    fogDensityDeep: 0.038,
+    // Keep the starting biome warm enough to read as sand/stone even through
+    // blue-green water. The previous grey palette was getting swallowed by the
+    // fog and making every surface converge on the same cyan value.
+    terrainShallowColor: 0xc8b98e,
+    terrainDeepColor: 0x556c68,
+    terrainSlopeColor: 0x747a70,
+    waterShallowColor: 0x3695a5,
+    waterDeepColor: 0x082d3d,
+    // Clearer than the first technical pass so nearby terrain keeps contrast.
+    // Deeper biomes can become genuinely murky later.
+    fogDensityShallow: 0.0105,
+    fogDensityDeep: 0.029,
   },
 };

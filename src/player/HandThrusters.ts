@@ -1,5 +1,6 @@
 import {
   Group,
+  Matrix4,
   Quaternion,
   Vector3,
   type Mesh,
@@ -11,14 +12,15 @@ import type { Locomotion } from './Locomotion.ts';
 import type { Handedness, VRHands } from './VRHands.ts';
 
 /**
- * Drop the reusable motor GLB here once it is ready. Its origin should be the
- * hand grip, local -Z should be forward/travel direction, and local +Z exhaust.
+ * Reusable handheld motor uploaded for both tracked hands.
+ * Local -Z is forward/travel direction and local +Z is exhaust.
  */
-const MOTOR_URL = './assets/player/motors/hand_motor.glb';
+const MOTOR_URL = './assets/player/motors/handheld_underwater_thruster.glb';
 const LOCAL_FORWARD = new Vector3(0, 0, -1);
 const _worldQuat = new Quaternion();
 const _direction = new Vector3();
 const _combined = new Vector3();
+const _gripLocal = new Matrix4();
 
 interface MotorVisual {
   root: Object3D;
@@ -63,9 +65,13 @@ export class HandThrusters {
         mesh.castShadow = false;
         mesh.receiveShadow = false;
       });
+
+      if (!this.template.getObjectByName('GripPoint')) {
+        console.warn('[thrusters] motor has no GripPoint helper; falling back to its scene origin');
+      }
     } catch (error) {
       // Propulsion intentionally still works from the tracked hand orientation if
-      // the GLB has not been dropped in yet. A reload after upload attaches visuals.
+      // the GLB is missing. A reload after upload attaches visuals.
       console.warn(`[thrusters] optional motor visual not found at ${MOTOR_URL}`, error);
     }
   }
@@ -99,8 +105,8 @@ export class HandThrusters {
   }
 
   private getForward(handedness: Handedness, target: Vector3): boolean {
-    // Once the visual exists, derive thrust from the actual motor orientation so
-    // any later attachment rotation automatically changes the physics too.
+    // Once the visual exists, derive thrust from the actual mounted motor orientation
+    // so any attachment correction automatically changes the physics too.
     const visual = this.visuals[handedness];
     const source = visual?.root ?? this.hands.getObjectGrip(handedness);
     if (!source) return false;
@@ -128,14 +134,25 @@ export class HandThrusters {
       return;
     }
 
-    // The requested GLB convention places its origin directly at GripPoint, so no
-    // magic offsets are baked into code. If the first visual test needs a tiny
-    // adjustment we can tune one attachment transform here without changing physics.
     const root = this.template.clone(true);
     root.name = `${handedness}-hand-motor`;
-    root.position.set(0, 0, 0);
-    root.quaternion.identity();
-    root.scale.set(1, 1, 1);
+
+    // The uploaded asset includes a real GripPoint helper rather than putting the
+    // scene origin at the handle. Compute that helper's transform relative to the
+    // cloned scene, invert it, and apply it to the scene root. GripPoint therefore
+    // lands exactly on the hand's held-object socket with no magic centimetre offsets.
+    const gripPoint = root.getObjectByName('GripPoint');
+    if (gripPoint) {
+      root.updateMatrixWorld(true);
+      gripPoint.updateWorldMatrix(true, false);
+      _gripLocal.copy(root.matrixWorld).invert().multiply(gripPoint.matrixWorld).invert();
+      _gripLocal.decompose(root.position, root.quaternion, root.scale);
+    } else {
+      root.position.set(0, 0, 0);
+      root.quaternion.identity();
+      root.scale.set(1, 1, 1);
+    }
+
     grip.add(root);
     this.visuals[handedness] = { root, grip };
   }

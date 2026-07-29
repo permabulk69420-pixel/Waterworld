@@ -8,10 +8,11 @@
   },
   {
     "id": "crashed-research-ship",
-    "label": "Crashed Research Ship",
-    "url": "./assets/build/ships/crashed_interplanetary_research_spacecraft.glb",
+    "label": "Open Rear Research Ship",
+    "url": "./assets/build/ships/crashed_open_rear_research_spacecraft.glb",
     "scale": 1,
     "spawnDistance": 24,
-    "spawnY": 0
+    "spawnY": 0,
+    "collision": true
   }
 ]

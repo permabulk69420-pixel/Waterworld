@@ -1,73 +1,78 @@
 import {
-  AnimationMixer,
+  DoubleSide,
+  DynamicDrawUsage,
+  InstancedBufferAttribute,
+  InstancedMesh,
   MathUtils,
+  Matrix4,
+  Mesh,
+  MeshStandardMaterial,
+  Object3D,
   Vector3,
-  type AnimationClip,
-  type Group,
-  type Mesh,
-  type Object3D,
+  type BufferGeometry,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { BiomeConfig } from '../config/biomes/types.ts';
 import type { ChunkContentContext, ContentPopulator } from './ContentRegistry.ts';
 
 const UP = new Vector3(0, 1, 0);
-const ASSET_URL = './assets/biomes/safe-shallows/tropical_seagrass_lush_animated.glb';
+const ASSET_URL = './assets/biomes/safe-shallows/tropical_seagrass_dense_quest3.glb';
 
 const DEFAULT_RENDER_DISTANCE = 46;
 const MIN_RENDER_DISTANCE = 10;
 const MAX_RENDER_DISTANCE = 100;
+const MAX_VISIBLE_INSTANCES = 8192;
+const CULL_REBUILD_DISTANCE = 2;
+const CULL_REBUILD_DISTANCE_SQ = CULL_REBUILD_DISTANCE * CULL_REBUILD_DISTANCE;
 
 export interface SeaGrassOptions {
-  /** Multiplies the biome's base vegetation density. 1 = current authored density. */
+  /** Multiplies the biome's base vegetation density. 1 = authored density. */
   densityMultiplier?: number;
-  /** Distance in metres at which grass is visible/created. */
+  /** Distance in metres at which grass instances are submitted to the GPU. */
   renderDistance?: number;
-}
-
-interface ActivePatch {
-  object: Object3D;
-  mixer: AnimationMixer | null;
 }
 
 interface GrassPlacement {
   position: Vector3;
-  normal: Vector3;
-  rotationY: number;
-  scale: number;
+  matrix: Matrix4;
   phase: number;
-  timeScale: number;
-  active: ActivePatch | null;
-}
-
-interface ChunkGrassState {
-  group: Group;
-  placements: GrassPlacement[];
 }
 
 /**
- * First vegetation pass for the Safe Shallows.
+ * Dense Safe Shallows vegetation renderer.
  *
- * Chunk loading only calculates cheap deterministic placement records. The GLB
- * itself is cloned on demand when the player gets close, so vegetation no longer
- * inherits the terrain's much larger streaming distance.
+ * The source GLB is deliberately tiny: one 512-triangle mesh, one material and
+ * no baked animation. Every visible patch is therefore rendered through one
+ * InstancedMesh, while a vertex shader supplies the underwater sway on the GPU.
+ *
+ * Loaded terrain chunks only keep cheap placement records. The instance buffer
+ * is rebuilt after the player moves a couple of metres or chunks stream in/out,
+ * so terrain can remain visible much farther away than vegetation without paying
+ * per-frame object, material, morph-target or AnimationMixer costs.
  */
 export class SeaGrassSystem implements ContentPopulator {
-  readonly id = 'safe-shallows-seagrass-v1';
+  readonly id = 'safe-shallows-seagrass-v2-instanced';
   readonly layer = 'vegetation' as const;
-  readonly keepsEmptyGroup = true;
   readonly ready: Promise<void>;
 
-  private template: Object3D | null = null;
-  private swayClip: AnimationClip | null = null;
-  private readonly chunks = new Map<string, ChunkGrassState>();
+  private readonly chunks = new Map<string, GrassPlacement[]>();
   private readonly densityMultiplier: number;
   private readonly renderDistanceSq: number;
-  private readonly unloadDistanceSq: number;
-  private readonly animationDistanceSq: number;
-  private loadFailed = false;
+  private readonly parent: Object3D;
+  private readonly dummy = new Object3D();
+  private readonly lastCullPosition = new Vector3(Number.POSITIVE_INFINITY, 0, 0);
+  private readonly swayTime = { value: 0 };
 
-  constructor(options: SeaGrassOptions = {}) {
+  private geometry: BufferGeometry | null = null;
+  private material: MeshStandardMaterial | null = null;
+  private instances: InstancedMesh | null = null;
+  private phaseAttribute: InstancedBufferAttribute | null = null;
+  private layoutDirty = true;
+  private loadFailed = false;
+  private warnedCapacity = false;
+
+  constructor(parent: Object3D, options: SeaGrassOptions = {}) {
+    this.parent = parent;
     this.densityMultiplier = MathUtils.clamp(options.densityMultiplier ?? 1, 0, 4);
 
     const renderDistance = MathUtils.clamp(
@@ -75,12 +80,7 @@ export class SeaGrassSystem implements ContentPopulator {
       MIN_RENDER_DISTANCE,
       MAX_RENDER_DISTANCE,
     );
-    const unloadDistance = renderDistance + Math.max(10, renderDistance * 0.35);
-    const animationDistance = Math.min(26, renderDistance * 0.6);
-
     this.renderDistanceSq = renderDistance * renderDistance;
-    this.unloadDistanceSq = unloadDistance * unloadDistance;
-    this.animationDistanceSq = animationDistance * animationDistance;
     this.ready = this.load();
   }
 
@@ -95,26 +95,80 @@ export class SeaGrassSystem implements ContentPopulator {
   private async load(): Promise<void> {
     try {
       const gltf = await new GLTFLoader().loadAsync(ASSET_URL);
-      this.template = gltf.scene;
-      this.swayClip = gltf.animations.find((clip) => clip.name === 'SeaGrass_Sway') ?? gltf.animations[0] ?? null;
+      let sourceMesh: Mesh | null = null;
 
-      this.template.traverse((object) => {
+      gltf.scene.traverse((object) => {
         const mesh = object as Mesh;
-        if (!mesh.isMesh) return;
-        mesh.castShadow = false;
-        mesh.receiveShadow = false;
+        if (!sourceMesh && mesh.isMesh) sourceMesh = mesh;
       });
+
+      if (!sourceMesh) throw new Error('GLB contains no mesh');
+      if (Array.isArray(sourceMesh.material)) {
+        throw new Error('Seagrass asset must use one material');
+      }
+      if (!(sourceMesh.material instanceof MeshStandardMaterial)) {
+        throw new Error('Seagrass material is not MeshStandardMaterial-compatible');
+      }
+
+      this.geometry = sourceMesh.geometry.clone();
+      this.material = sourceMesh.material.clone();
+      this.material.side = DoubleSide;
+      this.material.vertexColors = this.geometry.getAttribute('color') !== undefined;
+
+      // One phase value per patch lets every instance sway differently while the
+      // entire field still shares one shader and one draw call.
+      this.phaseAttribute = new InstancedBufferAttribute(
+        new Float32Array(MAX_VISIBLE_INSTANCES),
+        1,
+      );
+      this.geometry.setAttribute('instancePhase', this.phaseAttribute);
+
+      this.material.onBeforeCompile = (shader) => {
+        shader.uniforms.uSeaGrassTime = this.swayTime;
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <common>',
+          `#include <common>\nattribute float instancePhase;\nuniform float uSeaGrassTime;`,
+        );
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>\n\
+          float grassHeight = clamp(position.y / 1.18, 0.0, 1.0);\n\
+          float bendWeight = grassHeight * grassHeight;\n\
+          float swayPhase = uSeaGrassTime * 1.15 + instancePhase;\n\
+          transformed.x += sin(swayPhase + position.y * 1.7) * 0.075 * bendWeight;\n\
+          transformed.z += cos(swayPhase * 0.83 + position.y * 1.3) * 0.035 * bendWeight;`,
+        );
+      };
+      this.material.customProgramCacheKey = () => 'waterworld-seagrass-instanced-sway-v2';
+      this.material.needsUpdate = true;
+
+      this.instances = new InstancedMesh(
+        this.geometry,
+        this.material,
+        MAX_VISIBLE_INSTANCES,
+      );
+      this.instances.name = 'seagrass:instanced-field';
+      this.instances.count = 0;
+      this.instances.castShadow = false;
+      this.instances.receiveShadow = false;
+      // The buffer only changes when culling is rebuilt, not for the sway itself.
+      this.instances.instanceMatrix.setUsage(DynamicDrawUsage);
+      // All submitted instances are already inside the short grass radius. Keeping
+      // this as one draw call is cheaper and safer than recomputing a giant dynamic
+      // bounding sphere every time the player crosses the cull threshold.
+      this.instances.frustumCulled = false;
+      this.parent.add(this.instances);
     } catch (error) {
       this.loadFailed = true;
       console.warn(
-        `[vegetation] seagrass asset not found at ${ASSET_URL}; shallow scatter disabled until the GLB is added`,
+        `[vegetation] optimized seagrass asset failed to load at ${ASSET_URL}; shallow scatter disabled`,
         error,
       );
     }
   }
 
   populate(ctx: ChunkContentContext): void {
-    if (!this.template || this.loadFailed) return;
+    if (!this.instances || this.loadFailed) return;
 
     const density = ctx.biome.spawnDensity.vegetation * this.densityMultiplier;
     const chunkWidth = ctx.bounds.max.x - ctx.bounds.min.x;
@@ -123,153 +177,91 @@ export class SeaGrassSystem implements ContentPopulator {
     const placements: GrassPlacement[] = [];
 
     if (targetCount > 0) {
-      // Ask for extra candidates because this species only likes the brighter,
-      // gentler upper shallows. Rejected sites remain available for later plants.
       const candidates = ctx.sampleSeabedPoints(targetCount * 5, 0.82);
 
       for (const point of candidates) {
         if (placements.length >= targetCount) break;
         if (point.depth < 3 || point.depth > 18) continue;
 
+        const position = point.position.clone().addScaledVector(point.normal, 0.015);
+        this.dummy.position.copy(position);
+        this.dummy.quaternion.setFromUnitVectors(UP, point.normal);
+        this.dummy.rotateY(ctx.rng.range(0, Math.PI * 2));
+        this.dummy.scale.setScalar(ctx.rng.range(0.82, 1.22));
+        this.dummy.updateMatrix();
+
         placements.push({
-          position: point.position.clone().addScaledVector(point.normal, 0.015),
-          normal: point.normal.clone(),
-          rotationY: ctx.rng.range(0, Math.PI * 2),
-          scale: ctx.rng.range(0.82, 1.22),
-          phase: this.swayClip
-            ? ctx.rng.range(0, Math.max(0.001, this.swayClip.duration))
-            : 0,
-          timeScale: ctx.rng.range(0.88, 1.12),
-          active: null,
+          position,
+          matrix: this.dummy.matrix.clone(),
+          phase: ctx.rng.range(0, Math.PI * 2),
         });
       }
     }
 
-    this.chunks.set(ctx.key, { group: ctx.group, placements });
+    this.chunks.set(ctx.key, placements);
+    this.layoutDirty = true;
   }
 
   update(dt: number, playerPosition: Vector3): void {
-    if (!this.template || this.loadFailed) return;
+    if (!this.instances || !this.phaseAttribute || this.loadFailed) return;
 
-    const safeDt = MathUtils.clamp(dt, 0, 0.05);
+    this.swayTime.value += MathUtils.clamp(dt, 0, 0.05);
 
-    for (const chunk of this.chunks.values()) {
-      for (const placement of chunk.placements) {
+    const dx = playerPosition.x - this.lastCullPosition.x;
+    const dz = playerPosition.z - this.lastCullPosition.z;
+    if (!this.layoutDirty && dx * dx + dz * dz < CULL_REBUILD_DISTANCE_SQ) return;
+
+    this.rebuildVisibleInstances(playerPosition);
+  }
+
+  private rebuildVisibleInstances(playerPosition: Vector3): void {
+    if (!this.instances || !this.phaseAttribute) return;
+
+    let visible = 0;
+
+    outer: for (const placements of this.chunks.values()) {
+      for (const placement of placements) {
         const dx = placement.position.x - playerPosition.x;
         const dz = placement.position.z - playerPosition.z;
-        const distanceSq = dx * dx + dz * dz;
+        if (dx * dx + dz * dz > this.renderDistanceSq) continue;
 
-        if (!placement.active) {
-          if (distanceSq <= this.renderDistanceSq) {
-            placement.active = this.createPatch(chunk.group, placement);
+        if (visible >= MAX_VISIBLE_INSTANCES) {
+          if (!this.warnedCapacity) {
+            this.warnedCapacity = true;
+            console.warn(
+              `[vegetation] visible seagrass exceeded ${MAX_VISIBLE_INSTANCES} instances; extra patches are culled`,
+            );
           }
-          continue;
+          break outer;
         }
 
-        if (distanceSq > this.unloadDistanceSq) {
-          this.destroyPatch(placement.active);
-          placement.active = null;
-          continue;
-        }
-
-        // Hysteresis keeps a patch alive a little beyond the creation distance so
-        // swimming around the cutoff does not repeatedly allocate/free GLB clones.
-        placement.active.object.visible = distanceSq <= this.renderDistanceSq;
-
-        // Morph animation is relatively CPU-heavy. Scale the animation radius down
-        // with the render setting and never animate beyond 26 m.
-        if (placement.active.mixer && distanceSq <= this.animationDistanceSq) {
-          placement.active.mixer.update(safeDt);
-        }
+        this.instances.setMatrixAt(visible, placement.matrix);
+        this.phaseAttribute.setX(visible, placement.phase);
+        visible++;
       }
     }
-  }
 
-  private createPatch(group: Group, placement: GrassPlacement): ActivePatch {
-    if (!this.template) throw new Error('Seagrass template is not loaded');
-
-    const patch = this.template.clone(true);
-    patch.position.copy(placement.position);
-    patch.quaternion.setFromUnitVectors(UP, placement.normal);
-    patch.rotateY(placement.rotationY);
-    patch.scale.setScalar(placement.scale);
-
-    // The current generic chunk disposer assumes content owns its GPU resources.
-    // Clone them only for nearby active patches; distant chunks hold placement
-    // records instead of invisible GLB copies.
-    patch.traverse((object) => {
-      const mesh = object as Mesh;
-      if (!mesh.isMesh) return;
-      mesh.castShadow = false;
-      mesh.receiveShadow = false;
-      mesh.geometry = mesh.geometry.clone();
-      if (Array.isArray(mesh.material)) {
-        mesh.material = mesh.material.map((material) => material.clone());
-      } else {
-        mesh.material = mesh.material.clone();
-      }
-    });
-
-    group.add(patch);
-
-    let mixer: AnimationMixer | null = null;
-    if (this.swayClip) {
-      mixer = new AnimationMixer(patch);
-      const action = mixer.clipAction(this.swayClip);
-      action.play();
-      action.time = placement.phase;
-      action.timeScale = placement.timeScale;
-    }
-
-    return { object: patch, mixer };
-  }
-
-  private destroyPatch(active: ActivePatch): void {
-    active.mixer?.stopAllAction();
-    active.object.traverse((object) => {
-      const mesh = object as Mesh;
-      if (!mesh.isMesh) return;
-      mesh.geometry.dispose();
-      if (Array.isArray(mesh.material)) {
-        for (const material of mesh.material) material.dispose();
-      } else {
-        mesh.material.dispose();
-      }
-    });
-    active.object.removeFromParent();
+    this.instances.count = visible;
+    this.instances.instanceMatrix.needsUpdate = true;
+    this.phaseAttribute.needsUpdate = true;
+    this.lastCullPosition.copy(playerPosition);
+    this.layoutDirty = false;
   }
 
   dispose(key?: string): void {
     if (key !== undefined) {
-      const chunk = this.chunks.get(key);
-      if (chunk) {
-        for (const placement of chunk.placements) {
-          if (placement.active) this.destroyPatch(placement.active);
-          placement.active = null;
-        }
-      }
       this.chunks.delete(key);
+      this.layoutDirty = true;
       return;
     }
 
-    for (const chunk of this.chunks.values()) {
-      for (const placement of chunk.placements) {
-        if (placement.active) this.destroyPatch(placement.active);
-      }
-    }
     this.chunks.clear();
-
-    this.template?.traverse((object) => {
-      const mesh = object as Mesh;
-      if (!mesh.isMesh) return;
-      mesh.geometry.dispose();
-      if (Array.isArray(mesh.material)) {
-        for (const material of mesh.material) material.dispose();
-      } else {
-        mesh.material.dispose();
-      }
-    });
-    this.template = null;
-    this.swayClip = null;
+    this.instances?.removeFromParent();
+    this.geometry?.dispose();
+    this.material?.dispose();
+    this.instances = null;
+    this.geometry = null;
+    this.material = null;
+    this.phaseAttribute = null;
   }
 }

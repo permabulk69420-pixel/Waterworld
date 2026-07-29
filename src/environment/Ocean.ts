@@ -30,7 +30,7 @@ export interface OceanOptions {
  * does not slide when the disc follows the player.
  *
  * The shader shades both faces:
- *  - from above: sky-tinted fresnel over deep water, plus a sun highlight
+ *  - from above: restrained sky-tinted Fresnel over coloured water, plus sun glint
  *  - from below: Snell's window - you see the sky in a cone overhead and a
  *    mirror-like murk beyond the critical angle
  *
@@ -143,12 +143,25 @@ export class Ocean {
 
           if (gl_FrontFacing) {
             // --- seen from above ---
-            float fresnel = pow(1.0 - clamp(abs(facing), 0.0, 1.0), 4.0);
-            col = mix(uDeepColor, uSurfaceColor, 0.55);
-            col = mix(col, uSkyColor, 0.25 + 0.7 * fresnel);
+            // The old technical pass drove this blend as high as 95% sky at
+            // grazing angles. Because uSkyColor is the pale horizon colour, the
+            // whole ocean turned into a flat grey-white sheet at eye level.
+            // Keep a real water body colour underneath and reserve Fresnel for a
+            // restrained reflective lift instead.
+            float ndotv = clamp(facing, 0.0, 1.0);
+            float fresnel = 0.02 + 0.98 * pow(1.0 - ndotv, 5.0);
+
+            vec3 waterBody = mix(uDeepColor, uSurfaceColor, 0.68);
+            float skyAmount = 0.07 + 0.36 * fresnel;
+            col = mix(waterBody, uSkyColor, skyAmount);
+
+            // A little extra cyan lift on faces aimed toward the viewer keeps
+            // near water readable without washing out the horizon.
+            col = mix(col, uSurfaceColor, 0.10 * ndotv);
 
             vec3 H = normalize(L + V);
-            col += uSunColor * pow(max(dot(N, H), 0.0), 220.0) * 1.6;
+            float sunGlint = pow(max(dot(N, H), 0.0), 170.0);
+            col += uSunColor * sunGlint * 1.35;
           } else {
             // --- seen from below: Snell's window ---
             // Total internal reflection past ~48.6 degrees from vertical.

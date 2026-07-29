@@ -3,29 +3,24 @@ import { AmbientLight, Color, DirectionalLight, Group, HemisphereLight, Vector3 
 /**
  * Scene lighting.
  *
- * Two lights only - one directional "sun" and one hemisphere fill. No shadow
- * maps and no point lights: on standalone Quest every extra dynamic light is
- * paid for on every terrain vertex, and none of them would survive the fog
- * anyway. Underwater the sun is attenuated and the fill takes over, which is
- * both cheap and roughly what actually happens underwater.
+ * One directional sun plus cheap hemisphere/ambient fill. The important bit for
+ * the starting biome is contrast: the technical pass used enough blue fill to
+ * make caves readable, but it also flattened every ridge into the same cyan.
+ * This pass lets the sun do more of the modelling while retaining a small fill
+ * floor for caves and overhangs.
  */
 export class Lighting {
   readonly root = new Group();
   readonly sun: DirectionalLight;
   readonly hemisphere: HemisphereLight;
-  /**
-   * Underwater fill. Ambient light is constant irradiance rather than a
-   * per-fragment dynamic light, so it costs nothing extra on Quest, and it is
-   * the only thing that keeps the inside of a cave legible without shadows or
-   * local lights.
-   */
+  /** Cheap cave/underhang fill; no extra per-fragment dynamic light. */
   readonly ambient: AmbientLight;
   readonly sunDirection = new Vector3(0.4, 0.85, 0.28).normalize();
 
-  private readonly surfaceSunColor = new Color(0xfff2dc);
-  private readonly deepSunColor = new Color(0x9fd0dd);
-  private readonly surfaceSkyColor = new Color(0xa9c6d4);
-  private readonly surfaceGroundColor = new Color(0x8c8570);
+  private readonly surfaceSunColor = new Color(0xfff0d2);
+  private readonly deepSunColor = new Color(0x8bc8d2);
+  private readonly surfaceSkyColor = new Color(0xb7cdd2);
+  private readonly surfaceGroundColor = new Color(0x81755d);
   private readonly caveFill = new Color();
 
   constructor() {
@@ -53,27 +48,27 @@ export class Lighting {
    * @param depthT      0 at the surface, 1 at the biome's maximum depth
    */
   update(submergence: number, depthT: number, shallowWater: Color, deepWater: Color): void {
-    // Light falls off with depth; keep a floor so deep water stays readable.
-    const attenuation = 1 - 0.55 * depthT;
+    // Keep useful sunlight deeper than the first pass. This gives slopes a clear
+    // light-facing and dark-facing side instead of filling both equally blue.
+    const attenuation = 1 - 0.44 * depthT;
 
-    this.sun.intensity = (2.4 * (1 - submergence) + 1.35 * submergence) * attenuation;
+    this.sun.intensity = (2.4 * (1 - submergence) + 1.75 * submergence) * attenuation;
     this.sun.color.copy(this.surfaceSunColor).lerp(this.deepSunColor, submergence);
 
-    this.hemisphere.intensity = (1.1 * (1 - submergence) + 1.7 * submergence) * attenuation;
-    this.hemisphere.color.copy(this.surfaceSkyColor).lerp(shallowWater, submergence);
+    // Pull the broad blue fill back underwater so vertex colour and terrain
+    // shape survive. Ambient below provides the cave readability floor.
+    this.hemisphere.intensity = (1.1 * (1 - submergence) + 0.92 * submergence) * attenuation;
+    this.hemisphere.color.copy(this.surfaceSkyColor).lerp(shallowWater, submergence * 0.72);
 
-    // With no shadows and no point lights, the hemisphere's ground colour is
-    // the *only* light reaching a downward-facing surface - so it alone
-    // decides how readable cave ceilings and overhangs are. Straight
-    // `deepWater` renders them black; lifting it toward the shallow tint keeps
-    // caves moody but navigable, which is what this pass needs.
-    this.caveFill.copy(deepWater).lerp(shallowWater, 0.7);
+    // A slightly warmer/less saturated underside keeps rock and sand distinct
+    // from the surrounding water without introducing another dynamic light.
+    this.caveFill.copy(deepWater).lerp(shallowWater, 0.46);
     this.hemisphere.groundColor
       .copy(this.surfaceGroundColor)
-      .lerp(this.caveFill, submergence * 0.9);
+      .lerp(this.caveFill, submergence * 0.72);
 
     this.ambient.color.copy(this.caveFill);
-    this.ambient.intensity = 1.15 * submergence * attenuation;
+    this.ambient.intensity = 0.52 * submergence * attenuation;
   }
 
   /** Keeps the directional light centred so it never runs out of range. */

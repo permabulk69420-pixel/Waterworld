@@ -2,6 +2,7 @@ import { BuildSystem } from './build/BuildSystem.ts';
 import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
+import { BioluminescentPlankton } from './environment/BioluminescentPlankton.ts';
 import { HandThrusters } from './player/HandThrusters.ts';
 import { Headlamp } from './player/Headlamp.ts';
 import { RearLedgeClimb } from './player/RearLedgeClimb.ts';
@@ -9,7 +10,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V5-HEADLAMP';
+const BUILD_TAG = 'BUILD-MODE-V6-BIOLUMINESCENT-PLANKTON';
 
 /**
  * Bootstrap.
@@ -81,6 +82,14 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · loading VR hands`);
   await hands.ready;
 
+  const plankton = new BioluminescentPlankton(
+    game.scene,
+    game.environment,
+    game.rig,
+    hands,
+    game.locomotion,
+  );
+
   const authoredWorld = new BuildSystem(game.scene, game.renderer, game.rig, hands, mode);
   settings.setStatus(`${BUILD_TAG} · loading authored world`);
   await authoredWorld.ready;
@@ -119,19 +128,41 @@ async function bootstrap(): Promise<void> {
   // Vertical travel in Build stays on A/X and B/Y, so there is no input fight.
   game.xrInput.setTriggerVerticalEnabled(false);
 
-  game.addFrameListener((dt) => {
+  game.addFrameListener((dt, elapsed) => {
     hands.update(dt);
     headlamp?.update(dt);
     thrusters?.update(dt);
+    plankton.update(dt, elapsed);
     // Run after the motors so an anchored hand can cancel propulsion for the
     // current frame while the player physically pulls against the rear ledge.
     rearClimb?.update();
     authoredWorld.update();
   });
 
-  (window as unknown as { game: Game; build: BuildSystem; headlamp: Headlamp | null }).game = game;
-  (window as unknown as { game: Game; build: BuildSystem; headlamp: Headlamp | null }).build = authoredWorld;
-  (window as unknown as { game: Game; build: BuildSystem; headlamp: Headlamp | null }).headlamp = headlamp;
+  (window as unknown as {
+    game: Game;
+    build: BuildSystem;
+    headlamp: Headlamp | null;
+    plankton: BioluminescentPlankton;
+  }).game = game;
+  (window as unknown as {
+    game: Game;
+    build: BuildSystem;
+    headlamp: Headlamp | null;
+    plankton: BioluminescentPlankton;
+  }).build = authoredWorld;
+  (window as unknown as {
+    game: Game;
+    build: BuildSystem;
+    headlamp: Headlamp | null;
+    plankton: BioluminescentPlankton;
+  }).headlamp = headlamp;
+  (window as unknown as {
+    game: Game;
+    build: BuildSystem;
+    headlamp: Headlamp | null;
+    plankton: BioluminescentPlankton;
+  }).plankton = plankton;
 
   await game.start((progress, label) => {
     bootFill.style.width = `${Math.round(progress * 100)}%`;

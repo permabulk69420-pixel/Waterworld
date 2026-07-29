@@ -76,9 +76,17 @@ export interface ContentPopulator {
   /** Stable id - also seeds this populator's RNG. */
   readonly id: string;
   readonly layer: ContentLayer;
+  /**
+   * Keep this populator's empty group attached to a loaded chunk. Useful for
+   * content that records cheap placements at chunk-load time but only creates
+   * expensive meshes when the player gets close.
+   */
+  readonly keepsEmptyGroup?: boolean;
   /** Skip chunks whose biome does not want this content. */
   appliesTo?(biome: BiomeConfig): boolean;
   populate(ctx: ChunkContentContext): void;
+  /** Optional per-frame update for distance culling, animation, AI, etc. */
+  update?(dt: number, playerPosition: Vector3): void;
   /** Optional extra teardown; the chunk group itself is always disposed. */
   dispose?(key: string): void;
 }
@@ -107,9 +115,14 @@ export class ContentRegistry {
     return this.populators.length;
   }
 
+  /** Update runtime content once from the game's existing frame loop. */
+  update(dt: number, playerPosition: Vector3): void {
+    for (const populator of this.populators) populator.update?.(dt, playerPosition);
+  }
+
   /**
    * Runs every populator for a chunk. Returns the group to parent under the
-   * chunk mesh, or null when nothing was added (the common case today).
+   * chunk mesh, or null when nothing was added.
    */
   populate(
     key: string,
@@ -142,7 +155,7 @@ export class ContentRegistry {
         layerGroup,
       );
       populator.populate(ctx);
-      if (layerGroup.children.length > 0) root.add(layerGroup);
+      if (layerGroup.children.length > 0 || populator.keepsEmptyGroup) root.add(layerGroup);
     }
 
     return root.children.length > 0 ? root : null;

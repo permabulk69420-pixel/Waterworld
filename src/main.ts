@@ -5,7 +5,7 @@ import { HandThrusters } from './player/HandThrusters.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 
-const BUILD_TAG = 'MOTOR-XR-V5';
+const BUILD_TAG = 'MOTOR-XR-V6';
 
 /**
  * Bootstrap.

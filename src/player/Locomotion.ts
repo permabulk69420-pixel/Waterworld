@@ -25,24 +25,21 @@ export interface LocomotionState {
 }
 
 /**
- * Free-swimming locomotion with terrain collision.
+ * Swimming / surface / above-water locomotion with terrain collision.
  *
- * Design notes:
- *  - No gravity. The player is neutrally buoyant, so velocity only changes
- *    because of input, drag or a collision.
- *  - Velocity is eased toward the stick target rather than set from it, so
- *    there are no instant velocity changes in either direction.
- *  - Turning is rate-limited and eased for the same reason, and always happens
- *    about the head (see PlayerRig.rotateAroundHead).
- *  - The capsule is rebuilt from the *current* head position every frame, so
- *    physically leaning into a cave wall pushes the rig back out. The player's
- *    view is never rotated or snapped by the solver.
+ * Underwater the player is neutrally buoyant and can move freely in 3D. At the
+ * ocean surface their eyes are held just above the local animated wave, so the
+ * ascend control or looking upward cannot turn swimming into flight. If terrain
+ * physically lifts the capsule clear of the sea, movement switches to horizontal
+ * walking/falling with gravity. Falling back into the water restores swimming.
  */
 export class Locomotion {
   readonly velocity = new Vector3();
   readonly capsule = new Capsule();
 
   private turnRate = 0;
+  private swimming = true;
+
   readonly state: LocomotionState = {
     speed: 0,
     contacts: 0,
@@ -57,7 +54,11 @@ export class Locomotion {
     private readonly config: PlayerConfig,
   ) {}
 
-  update(dt: number, intent: MoveIntent, extraYaw = 0): void {
+  /**
+   * @param surfaceY Local animated ocean height at the player. Omit only for
+   * legacy/debug callers that intentionally want unrestricted swimming.
+   */
+  update(dt: number, intent: MoveIntent, extraYaw = 0, surfaceY?: number): void {
     if (dt <= 0) return;
     const cfg = this.config;
 
@@ -67,7 +68,50 @@ export class Locomotion {
     const yaw = this.turnRate * dt + extraYaw;
     if (Math.abs(yaw) > 1e-7) this.rig.rotateAroundHead(yaw);
 
-    // --- desired velocity --------------------------------------------------
+    this.rig.getHeadPosition(_head);
+
+    const haveSurface = Number.isFinite(surfaceY);
+    const localSurface = haveSurface ? (surfaceY as number) : Number.POSITIVE_INFINITY;
+    const surfaceHeadCap = localSurface + cfg.surfaceEyeClearance;
+
+    // Falling back into the sea immediately restores neutral-buoyant swimming.
+    if (!this.swimming && _head.y <= surfaceHeadCap) {
+      this.swimming = true;
+      if (this.velocity.y < -cfg.verticalSpeed) this.velocity.y = -cfg.verticalSpeed;
+    }
+
+    // A teleport/debug move that leaves us clearly above the ocean should not
+    // preserve underwater flight forever. Normal shore exits are handled after
+    // collision below so room-scale head movement alone cannot accidentally do it.
+    if (this.swimming && haveSurface && _head.y > localSurface + cfg.surfaceExitClearance + 0.5) {
+      this.swimming = false;
+    }
+
+    if (this.swimming) {
+      this.updateSwimmingVelocity(dt, intent, haveSurface ? surfaceHeadCap : undefined);
+    } else {
+      this.updateAboveWaterVelocity(dt, intent);
+    }
+
+    this.move(dt);
+
+    if (this.swimming && haveSurface) {
+      this.rig.getHeadPosition(_head);
+
+      // If collision with real terrain has lifted the body clear of the water,
+      // treat that as climbing onto shore instead of yanking the player back down.
+      if (this.state.grounded && _head.y > localSurface + cfg.surfaceExitClearance) {
+        this.swimming = false;
+        if (this.velocity.y < 0) this.velocity.y = 0;
+      } else {
+        this.constrainToSurface(surfaceHeadCap);
+      }
+    }
+  }
+
+  private updateSwimmingVelocity(dt: number, intent: MoveIntent, surfaceHeadCap?: number): void {
+    const cfg = this.config;
+
     this.rig.getHeadForward(_forward);
     if (!cfg.headRelativeVertical) {
       _forward.y = 0;
@@ -88,20 +132,61 @@ export class Locomotion {
     _target.addScaledVector(_right, intent.strafe * speed);
     _target.addScaledVector(WORLD_UP, intent.vertical * cfg.verticalSpeed);
 
+    // Ease upward swimming away as the player's eyes approach the wave. This
+    // catches both explicit ascend input and vertical movement caused by looking up.
+    if (surfaceHeadCap !== undefined && _target.y > 0) {
+      this.rig.getHeadPosition(_head);
+      const remaining = surfaceHeadCap - _head.y;
+      const surfaceBand = 0.35;
+      const factor = MathUtils.clamp(remaining / surfaceBand, 0, 1);
+      _target.y *= factor;
+    }
+
     // Diagonal input should not exceed the top speed.
     const targetSpeed = _target.length();
     const maxSpeed = Math.hypot(speed, cfg.verticalSpeed);
     if (targetSpeed > maxSpeed) _target.multiplyScalar(maxSpeed / targetSpeed);
 
-    // --- integrate ---------------------------------------------------------
     const rate = targetSpeed > 0.01 ? cfg.acceleration : cfg.deceleration;
     this.velocity.x = damp(this.velocity.x, _target.x, rate, dt);
     this.velocity.y = damp(this.velocity.y, _target.y, rate, dt);
     this.velocity.z = damp(this.velocity.z, _target.z, rate, dt);
     this.velocity.multiplyScalar(Math.max(0, 1 - cfg.drag * dt));
     if (this.velocity.lengthSq() < 1e-6) this.velocity.set(0, 0, 0);
+  }
 
-    this.move(dt);
+  private updateAboveWaterVelocity(dt: number, intent: MoveIntent): void {
+    const cfg = this.config;
+
+    // Out of the water, stick movement is horizontal even if the player looks
+    // upward. Vertical swim buttons intentionally do nothing in air.
+    this.rig.getHeadForward(_forward);
+    _forward.y = 0;
+    if (_forward.lengthSq() < 1e-6) _forward.set(0, 0, -1);
+    _forward.normalize();
+    this.rig.getHeadRight(_right);
+
+    _target.set(0, 0, 0);
+    _target.addScaledVector(_forward, intent.forward * cfg.walkSpeed);
+    _target.addScaledVector(_right, intent.strafe * cfg.walkSpeed);
+
+    const targetHorizontalSpeed = Math.hypot(_target.x, _target.z);
+    if (targetHorizontalSpeed > cfg.walkSpeed) {
+      const scale = cfg.walkSpeed / targetHorizontalSpeed;
+      _target.x *= scale;
+      _target.z *= scale;
+    }
+
+    const rate = targetHorizontalSpeed > 0.01 ? cfg.acceleration : cfg.deceleration;
+    this.velocity.x = damp(this.velocity.x, _target.x, rate, dt);
+    this.velocity.z = damp(this.velocity.z, _target.z, rate, dt);
+
+    // Gravity is the key distinction from underwater locomotion: no more flying
+    // once the body is actually clear of the sea.
+    this.velocity.y = Math.max(
+      this.velocity.y - cfg.gravity * dt,
+      -cfg.terminalFallSpeed,
+    );
   }
 
   /** Sweeps the capsule, resolving collisions, and moves the rig to match. */
@@ -139,6 +224,17 @@ export class Locomotion {
     this.state.correction = correction;
     this.state.grounded = grounded;
     this.state.substeps = substeps;
+  }
+
+  /** Keeps a swimming player's eyes at/below the local animated surface. */
+  private constrainToSurface(maxHeadY: number): void {
+    this.rig.getHeadPosition(_head);
+    if (_head.y <= maxHeadY) return;
+
+    _step.set(0, maxHeadY - _head.y, 0);
+    this.rig.translate(_step);
+    this.capsule.translate(_step);
+    if (this.velocity.y > 0) this.velocity.y = 0;
   }
 
   /**

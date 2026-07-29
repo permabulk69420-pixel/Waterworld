@@ -2,6 +2,7 @@ import {
   AdditiveBlending,
   BufferAttribute,
   BufferGeometry,
+  DynamicDrawUsage,
   Points,
   Scene,
   ShaderMaterial,
@@ -71,10 +72,9 @@ export class BioluminescentPlankton {
       const radius = HORIZONTAL_RADIUS * Math.sqrt(random());
       const angle = random() * Math.PI * 2;
       this.positions[i3] = _head.x + Math.cos(angle) * radius;
-      this.positions[i3 + 1] = Math.min(
-        this.environment.seaLevel - 0.08,
-        _head.y + (random() * 2 - 1) * VERTICAL_RADIUS,
-      );
+      // Bootstrap happens before the underwater spawn is applied, so seed the
+      // first cloud directly below sea level instead of around the desktop camera.
+      this.positions[i3 + 1] = this.environment.seaLevel - 0.1 - random() * VERTICAL_RADIUS * 2;
       this.positions[i3 + 2] = _head.z + Math.sin(angle) * radius;
 
       this.sizes[i] = 2.2 + random() * 5.4;
@@ -86,9 +86,9 @@ export class BioluminescentPlankton {
 
     const geometry = new BufferGeometry();
     this.positionAttribute = new BufferAttribute(this.positions, 3);
-    this.positionAttribute.setUsage(35048); // DynamicDrawUsage without another import.
+    this.positionAttribute.setUsage(DynamicDrawUsage);
     this.exciteAttribute = new BufferAttribute(this.excite, 1);
-    this.exciteAttribute.setUsage(35048);
+    this.exciteAttribute.setUsage(DynamicDrawUsage);
     geometry.setAttribute('position', this.positionAttribute);
     geometry.setAttribute('aSize', new BufferAttribute(this.sizes, 1));
     geometry.setAttribute('aPhase', new BufferAttribute(this.phases, 1));

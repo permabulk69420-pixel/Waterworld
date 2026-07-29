@@ -5,7 +5,7 @@
       "id": "story-crashed-research-ship",
       "assetId": "crashed-research-ship",
       "position": [0, 0, -24],
-      "rotation": [-0.022802777318407706, -0.10346092752588282, 0.05386310016725082, 0.9929121996744846],
+      "rotation": [0, 0, 0, 1],
       "scale": [1, 1, 1]
     }
   ]

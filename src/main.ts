@@ -8,6 +8,7 @@ import { FruitMushroomSystem } from './content/FruitMushroomSystem.ts';
 import { GiantMushroomSystem } from './content/GiantMushroomSystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
+import { RiftmawHunterSystem } from './content/RiftmawHunterSystem.ts';
 import { RiverRockSystem } from './content/RiverRockSystem.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
 import { SnapBulbSystem } from './content/SnapBulbSystem.ts';
@@ -21,7 +22,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V23-PBR-SAND-V10';
+const BUILD_TAG = 'BUILD-MODE-V24-RIFTMAW-HUNTER';
 
 /**
  * Bootstrap.
@@ -107,6 +108,16 @@ async function bootstrap(): Promise<void> {
   );
   settings.setStatus(`${BUILD_TAG} · loading colossus mushroom landmark`);
   await colossusMushroom.ready;
+
+  const riftmawHunter = new RiftmawHunterSystem(
+    game.scene,
+    game.density,
+    game.environment,
+    game.rig,
+    colossusMushroom,
+  );
+  settings.setStatus(`${BUILD_TAG} · loading Riftmaw hunter`);
+  await riftmawHunter.ready;
 
   const prismFish = new PrismFishSystem(
     game.scene,
@@ -231,6 +242,7 @@ async function bootstrap(): Promise<void> {
     thrusterLighting?.update();
     prismFish.update(dt, elapsed);
     alienFish.update(dt, elapsed);
+    riftmawHunter.update(dt, elapsed);
     speargun?.update(dt);
     octopusCrabs.update(dt);
     plankton.update(dt, elapsed);
@@ -249,6 +261,7 @@ async function bootstrap(): Promise<void> {
     plankton: BioluminescentPlankton;
     fruitMushrooms: FruitMushroomSystem;
     speargun: SpeargunSystem | null;
+    riftmaw: RiftmawHunterSystem;
   }).game = game;
   (window as unknown as {
     game: Game;
@@ -257,6 +270,7 @@ async function bootstrap(): Promise<void> {
     plankton: BioluminescentPlankton;
     fruitMushrooms: FruitMushroomSystem;
     speargun: SpeargunSystem | null;
+    riftmaw: RiftmawHunterSystem;
   }).build = authoredWorld;
   (window as unknown as {
     game: Game;
@@ -265,6 +279,7 @@ async function bootstrap(): Promise<void> {
     plankton: BioluminescentPlankton;
     fruitMushrooms: FruitMushroomSystem;
     speargun: SpeargunSystem | null;
+    riftmaw: RiftmawHunterSystem;
   }).headlamp = headlamp;
   (window as unknown as {
     game: Game;
@@ -273,10 +288,12 @@ async function bootstrap(): Promise<void> {
     plankton: BioluminescentPlankton;
     fruitMushrooms: FruitMushroomSystem;
     speargun: SpeargunSystem | null;
+    riftmaw: RiftmawHunterSystem;
   }).plankton = plankton;
   (window as unknown as { snapBulbs: SnapBulbSystem }).snapBulbs = snapBulbs;
   (window as unknown as { fruitMushrooms: FruitMushroomSystem }).fruitMushrooms = fruitMushrooms;
   (window as unknown as { speargun: SpeargunSystem | null }).speargun = speargun;
+  (window as unknown as { riftmaw: RiftmawHunterSystem }).riftmaw = riftmawHunter;
 
   await game.start((progress, label) => {
     bootFill.style.width = `${Math.round(progress * 100)}%`;

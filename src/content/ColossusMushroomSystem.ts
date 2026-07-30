@@ -14,12 +14,12 @@ import type { BiomeRegistry } from '../config/biomes/index.ts';
 import type { Environment } from '../environment/Environment.ts';
 import type { DensityField } from '../world/density.ts';
 
-const ASSET_URL = './assets/biomes/safe-shallows/alien_colossus_mushroom_50m_redcap_v3.glb';
+const ASSET_URL = './assets/biomes/safe-shallows/alien_colossus_mushroom_60m_v1_PBRv1.glb';
 
 // This is a navigation landmark, not scatter vegetation. Keep one specimen in a
 // fixed general direction from the starting area so players can learn the world by
 // silhouette rather than needing a HUD marker.
-const TARGET_HEIGHT = 50;
+const TARGET_HEIGHT = 60;
 const IDEAL_X = 118;
 const IDEAL_Z = -92;
 const SEARCH_RADIUS = 48;
@@ -28,6 +28,7 @@ const PREFERRED_DEPTH = 18;
 const BASE_SINK = 0.45;
 
 const GLOW_NAME_HINT = /glow|gill|emiss|bio|lumen|light|under|ventral/i;
+const NO_GLOW_NAME_HINT = /no[-_\s]?glow/i;
 const FALLBACK_GLOW_COLOR = new Color(0x42ddff);
 
 const _rawSize = new Vector3();
@@ -41,12 +42,12 @@ interface GlowMaterialState {
 }
 
 /**
- * One 50 m alien-mushroom landmark for the Safe Shallows.
+ * One 60 m alien-mushroom landmark for the Safe Shallows.
  *
  * The loader measures the supplied GLB at runtime, corrects a likely Z-up export,
- * grounds its lowest point, and normalises the final visible height to 50 metres.
- * Any authored emissive/gill/glow material is cloned and driven by the existing
- * Environment.daylight value so the underside wakes up naturally after sunset.
+ * grounds its lowest point, and normalises the final visible height to 60 metres.
+ * Authored underside emissive/gill/glow materials are cloned and driven by the
+ * existing Environment.daylight value so the underside wakes up naturally after sunset.
  */
 export class ColossusMushroomSystem {
   readonly ready: Promise<void>;
@@ -149,11 +150,15 @@ export class ColossusMushroomSystem {
     if (!(clone instanceof MeshStandardMaterial)) return clone;
 
     const hint = `${clone.name} ${meshName}`;
+    const explicitlyNoGlow = NO_GLOW_NAME_HINT.test(hint);
     const hasAuthoredEmission =
       clone.emissiveMap !== null || clone.emissive.r + clone.emissive.g + clone.emissive.b > 0.015;
     const looksLikeGlowPart = GLOW_NAME_HINT.test(hint);
 
-    if (hasAuthoredEmission || looksLikeGlowPart) {
+    // The new PBR colossus deliberately names non-emissive surfaces *_NoGlow.
+    // Honour that before fuzzy name matching so the trunk/cap never become neon
+    // merely because their material name contains the literal word "Glow".
+    if (!explicitlyNoGlow && (hasAuthoredEmission || looksLikeGlowPart)) {
       const color = clone.emissive.clone();
       if (color.r + color.g + color.b < 0.015) color.copy(FALLBACK_GLOW_COLOR);
 

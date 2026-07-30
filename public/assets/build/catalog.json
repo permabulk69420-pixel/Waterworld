@@ -14,5 +14,12 @@
     "spawnDistance": 24,
     "spawnY": 0,
     "collision": true
+  },
+  {
+    "id": "snap-bulb",
+    "label": "Snap Bulb (pearl)",
+    "url": "./assets/fauna/snap_bulb_FINAL_verified.glb",
+    "scale": 0.93,
+    "spawnDistance": 1.25
   }
 ]

@@ -2,6 +2,7 @@ import { installBuildSelectionAssist } from './build/BuildSelectionAssist.ts';
 import { BuildSystem } from './build/BuildSystem.ts';
 import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
+import { AlienFishSystem } from './content/AlienFishSystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
 import { RiverRockSystem } from './content/RiverRockSystem.ts';
@@ -16,7 +17,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V13-PBR-RIVER-ROCKS';
+const BUILD_TAG = 'BUILD-MODE-V14-ALIEN-FISH';
 
 /**
  * Bootstrap.
@@ -99,6 +100,16 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · loading prism fish`);
   await prismFish.ready;
 
+  const alienFish = new AlienFishSystem(
+    game.scene,
+    game.density,
+    game.biomes,
+    game.environment,
+    game.rig,
+  );
+  settings.setStatus(`${BUILD_TAG} · loading alien fish`);
+  await alienFish.ready;
+
   const octopusCrabs = new OctopusCrabSystem(
     game.scene,
     game.density,
@@ -178,6 +189,7 @@ async function bootstrap(): Promise<void> {
     // once so it now darkens naturally with the rest of the underwater scene.
     thrusterLighting?.update();
     prismFish.update(dt, elapsed);
+    alienFish.update(dt, elapsed);
     octopusCrabs.update(dt);
     plankton.update(dt, elapsed);
     // Run after the motors so an anchored hand can cancel propulsion for the

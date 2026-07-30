@@ -59,9 +59,9 @@ export class Lighting {
     this.daySun.copy(this.sunsetSunColor).lerp(this.surfaceSunColor, daylight);
     this.sun.color.copy(this.daySun).lerp(this.deepSunColor, submergence * 0.7);
     const sunDayIntensity = (2.4 * (1 - submergence) + 1.75 * submergence) * attenuation;
-    // Nearly no directional light at full night; silhouettes should come from the
-    // very small ambient/sky floor or from player lights, not a fake moon-sun.
-    this.sun.intensity = 0.004 + sunDayIntensity * daylight;
+    // Keep a vanishingly small floor only to avoid hard numerical black. Player
+    // lights should dominate underwater at full night.
+    this.sun.intensity = 0.0015 + sunDayIntensity * daylight;
 
     this.daySky.copy(this.nightSkyColor).lerp(this.surfaceSkyColor, twilight);
     this.hemisphere.color.copy(this.daySky).lerp(shallowWater, submergence * 0.72 * twilight);
@@ -73,12 +73,12 @@ export class Lighting {
       .lerp(this.caveFill, submergence * 0.72 * twilight);
 
     const hemiDayIntensity = (1.1 * (1 - submergence) + 0.92 * submergence) * attenuation;
-    // Previous night floor was high enough to make the darkness read as foggy blue.
-    // Cut it hard so night is genuinely dark while still avoiding absolute black.
-    this.hemisphere.intensity = 0.012 + hemiDayIntensity * (0.03 + 0.97 * twilight);
+    // The former night floor still lifted distant terrain into a grey/teal wash.
+    // Full night now has only a tiny sky floor; twilight/daylight ramp normally.
+    this.hemisphere.intensity = 0.004 + hemiDayIntensity * (0.008 + 0.992 * twilight);
 
     this.ambient.color.copy(this.caveFill);
-    this.ambient.intensity = submergence * attenuation * (0.012 + 0.508 * daylight);
+    this.ambient.intensity = submergence * attenuation * (0.003 + 0.517 * daylight);
   }
 
   /** Keeps the directional light centred so it never runs out of range. */

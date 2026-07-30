@@ -142,9 +142,13 @@ export class Environment {
     const waterDensity =
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
-    // Fog density is depth-driven only; day/night changes lighting,
-    // not visibility distance.
-    this.fog.density = AIR_FOG_DENSITY + (waterDensity - AIR_FOG_DENSITY) * this.submergence;
+    // Bright shallow water should read clearer than the same water at night/depth.
+    // Keep the change modest and fade it quickly with depth so the world still has
+    // strong blue distance haze instead of looking like air with a cyan background.
+    const shallowDayClarity = this.submergence * this.daylight * Math.pow(1 - depthT, 1.6);
+    const adjustedWaterDensity = waterDensity * (1 - 0.2 * shallowDayClarity);
+    this.fog.density =
+      AIR_FOG_DENSITY + (adjustedWaterDensity - AIR_FOG_DENSITY) * this.submergence;
 
     this.lighting.update(
       this.submergence,

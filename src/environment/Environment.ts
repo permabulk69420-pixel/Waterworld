@@ -3,7 +3,6 @@ import { Sky } from './Sky.ts';
 import { Ocean } from './Ocean.ts';
 import { Lighting } from './Lighting.ts';
 import { LightShafts } from './LightShafts.ts';
-import { SurfaceOptics } from './SurfaceOptics.ts';
 import { TerrainCaustics } from './TerrainCaustics.ts';
 import type { WorldConfig } from '../config/worldConfig.ts';
 import type { BiomeRegistry } from '../config/biomes/index.ts';
@@ -14,13 +13,19 @@ import { saturate, smoothstep } from '../math/mathUtils.ts';
 const DAY_LENGTH_SECONDS = 12 * 60;
 const START_TIME_OF_DAY = 10 / 24;
 
+/**
+ * Above-water haze. Low enough that open sea still reads as sea a few hundred
+ * metres out, dense enough that the ocean disc's 2.4 km rim is long gone before
+ * it could ever be seen as an edge.
+ */
+const AIR_FOG_DENSITY = 0.0012;
+
 /** Ties sky, ocean, lighting, fog, day/night and cheap volumetric cues together. */
 export class Environment {
   readonly sky: Sky;
   readonly ocean: Ocean;
   readonly lighting: Lighting;
   readonly shafts: LightShafts;
-  readonly surfaceOptics: SurfaceOptics;
 
   /** 0 = fully above water, 1 = fully submerged. */
   submergence = 0;
@@ -32,17 +37,22 @@ export class Environment {
   daylight = 1;
 
   private readonly fog: FogExp2;
-  private readonly dayAir = new Color(0xb9c9cd);
-  private readonly nightAir = new Color(0x000104);
   private readonly nightWater = new Color(0x000204);
-  private readonly dayZenith = new Color(0x5d86a4);
-  private readonly dayHorizon = new Color(0xb9c9cd);
+  // A deeper zenith than the old near-grey: the whole point of the horizon haze
+  // in the sky shader is that it has something to fade *from*.
+  private readonly dayZenith = new Color(0x3d78ab);
+  private readonly dayHorizon = new Color(0xbdcbcc);
   private readonly nightZenith = new Color(0x000208);
   private readonly nightHorizon = new Color(0x030811);
   private readonly duskHorizon = new Color(0xd07858);
   private readonly daySunColor = new Color(0xfff4e2);
   private readonly duskSunColor = new Color(0xff8b52);
   private readonly blackSun = new Color(0x000000);
+  private readonly dayCloudLit = new Color(0xfdfaf4);
+  private readonly dayCloudDark = new Color(0x93a8b8);
+  private readonly duskCloudLit = new Color(0xffbc93);
+  private readonly duskCloudDark = new Color(0x6a5570);
+  private readonly nightCloud = new Color(0x070c14);
   private readonly shallowWater = new Color();
   private readonly deepWater = new Color();
   private readonly sunlitWater = new Color(0x72b5ae);
@@ -51,6 +61,9 @@ export class Environment {
   private readonly tmpZenith = new Color();
   private readonly tmpHorizon = new Color();
   private readonly tmpSun = new Color();
+  private readonly tmpScatter = new Color();
+  private readonly tmpCloudLit = new Color();
+  private readonly tmpCloudDark = new Color();
   private readonly tmpOceanSurface = new Color();
   private readonly tmpOceanDeep = new Color();
   private fogDensityShallow = 0.016;
@@ -68,20 +81,22 @@ export class Environment {
     this.ocean = new Ocean({
       seaLevel: config.seaLevel,
       radius: 2400,
-      rings: 56,
-      segments: 96,
+      // ~21k triangles for the entire ocean, which is noise next to the terrain
+      // budget. Worth spending: the surface is shaded with an analytic normal,
+      // so anywhere the geometry is too coarse to match it, the facets show -
+      // most visibly along the edge of Snell's window a few metres overhead.
+      rings: 72,
+      segments: 144,
     });
-    this.surfaceOptics = new SurfaceOptics(config.seaLevel);
     this.shafts = new LightShafts(config.seaLevel, this.lighting.sunDirection);
 
-    this.fog = new FogExp2(this.dayAir.getHex(), 0.0016);
+    this.fog = new FogExp2(this.dayHorizon.getHex(), AIR_FOG_DENSITY);
     scene.fog = this.fog;
-    scene.background = this.dayAir.clone();
+    scene.background = this.dayHorizon.clone();
 
     scene.add(this.sky.mesh);
     scene.add(this.lighting.root);
     scene.add(this.ocean.mesh);
-    scene.add(this.surfaceOptics.mesh);
     scene.add(this.shafts.root);
 
     this.applyBiome(biomes);
@@ -129,7 +144,7 @@ export class Environment {
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
     // Fog density is depth-driven only; day/night changes lighting,
     // not visibility distance.
-    this.fog.density = 0.0016 + (waterDensity - 0.0016) * this.submergence;
+    this.fog.density = AIR_FOG_DENSITY + (waterDensity - AIR_FOG_DENSITY) * this.submergence;
 
     this.lighting.update(
       this.submergence,
@@ -143,10 +158,10 @@ export class Environment {
 
     this.sky.setExposure((0.08 + 0.92 * this.currentTwilight()) * (1 - 0.5 * this.submergence));
     this.sky.setFogBlend(this.tmpColor, this.submergence);
+    this.sky.setTime(elapsed);
     this.sky.followCamera(cameraPosition);
 
-    this.ocean.update(elapsed, cameraPosition, this.submergence > 0.5);
-    this.surfaceOptics.update(elapsed, cameraPosition, this.submergence > 0.5);
+    this.ocean.update(elapsed, cameraPosition);
     this.shafts.update(
       elapsed,
       cameraPosition,
@@ -172,25 +187,42 @@ export class Environment {
     const horizonBand = 1 - smoothstep(0.04, 0.42, Math.abs(rawAltitude));
     const duskAmount = horizonBand * twilight;
 
-    this.tmpAir.copy(this.nightAir).lerp(this.dayAir, twilight);
     this.tmpZenith.copy(this.nightZenith).lerp(this.dayZenith, twilight);
     this.tmpHorizon.copy(this.nightHorizon).lerp(this.dayHorizon, twilight);
     this.tmpHorizon.lerp(this.duskHorizon, duskAmount * 0.72);
 
+    // Above-water fog is locked to the sky's horizon colour. The ocean disc ends
+    // 2.4 km out, and this is what makes that edge land on exactly the colour
+    // the dome is already painting behind it instead of showing as a seam.
+    this.tmpAir.copy(this.tmpHorizon);
+
     this.tmpSun.copy(this.duskSunColor).lerp(this.daySunColor, this.daylight);
     this.tmpSun.lerp(this.blackSun, 1 - twilight);
 
+    this.tmpCloudLit.copy(this.nightCloud).lerp(this.dayCloudLit, twilight);
+    this.tmpCloudLit.lerp(this.duskCloudLit, duskAmount * 0.8);
+    this.tmpCloudDark.copy(this.nightCloud).lerp(this.dayCloudDark, twilight);
+    this.tmpCloudDark.lerp(this.duskCloudDark, duskAmount * 0.7);
+
     this.sky.setSunDirection(this.lighting.sunDirection);
     this.sky.setPalette(this.tmpZenith, this.tmpHorizon, this.tmpSun);
+    this.sky.setClouds(this.tmpCloudLit, this.tmpCloudDark, 0.7);
+    // Stars fade in as the sun drops below the twilight band.
+    this.sky.setStarStrength(Math.pow(1 - twilight, 1.5));
 
     this.tmpOceanSurface.copy(this.shallowWater).lerp(this.nightWater, (1 - twilight) * 0.92);
     this.tmpOceanDeep.copy(this.deepWater).lerp(this.nightWater, (1 - twilight) * 0.96);
-    this.ocean.setColors(this.tmpOceanSurface, this.tmpOceanDeep, this.tmpHorizon);
+    this.tmpScatter.copy(this.sunlitWater).lerp(this.nightWater, 1 - twilight);
+    this.ocean.setColors(
+      this.tmpOceanSurface,
+      this.tmpOceanDeep,
+      this.tmpZenith,
+      this.tmpHorizon,
+      this.tmpScatter,
+    );
     this.ocean.setSunDirection(this.lighting.sunDirection);
     this.ocean.setSunColor(this.tmpSun);
-    this.surfaceOptics.setColors(this.tmpOceanSurface, this.tmpHorizon);
-    this.surfaceOptics.setSunDirection(this.lighting.sunDirection);
-    this.surfaceOptics.setSunColor(this.tmpSun);
+    this.ocean.setDaylight(this.daylight);
   }
 
   private currentTwilight(rawAltitude?: number): number {
@@ -222,7 +254,6 @@ export class Environment {
   dispose(): void {
     this.sky.dispose();
     this.ocean.dispose();
-    this.surfaceOptics.dispose();
     this.lighting.dispose();
     this.shafts.dispose();
   }

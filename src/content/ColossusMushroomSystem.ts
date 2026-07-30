@@ -215,6 +215,14 @@ export class ColossusMushroomSystem {
     return new Vector3(IDEAL_X, y, IDEAL_Z);
   }
 
+  /** Copies the actually placed landmark root position into target. */
+  getWorldPosition(target: Vector3): boolean {
+    if (!this.root) return false;
+    this.root.updateMatrixWorld(true);
+    this.root.getWorldPosition(target);
+    return true;
+  }
+
   update(elapsed: number): void {
     if (this.loadFailed || this.glowMaterials.length === 0) return;
 

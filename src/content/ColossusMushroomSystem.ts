@@ -44,8 +44,8 @@ interface GlowMaterialState {
 /**
  * One 60 m alien-mushroom landmark for the Safe Shallows.
  *
- * The loader measures the supplied GLB at runtime, corrects a likely Z-up export,
- * grounds its lowest point, and normalises the final visible height to 60 metres.
+ * The current 60 m asset is authored Z-up, so the loader rotates it into Three.js
+ * Y-up space before grounding and normalising the final visible height to 60 metres.
  * Authored underside emissive/gill/glow materials are cloned and driven by the
  * existing Environment.daylight value so the underside wakes up naturally after sunset.
  */
@@ -74,11 +74,12 @@ export class ColossusMushroomSystem {
       rawBounds.getSize(_rawSize);
       if (_rawSize.lengthSq() <= 0.001) throw new Error('colossus mushroom GLB has invalid bounds');
 
-      // The earlier mushroom from the same asset family arrived Z-up. Detect that
-      // shape instead of blindly rotating every future export.
+      // This asset is Z-up. Its cap is roughly as wide as the full mushroom is tall,
+      // so a bounds-ratio heuristic cannot reliably infer the up axis. Apply the
+      // authored-axis correction explicitly before measuring, grounding and scaling.
       const axisFix = new Group();
       axisFix.name = 'flora:colossus-axis-fix';
-      if (_rawSize.z > _rawSize.y * 1.2) axisFix.rotation.x = -Math.PI / 2;
+      axisFix.rotation.x = -Math.PI / 2;
       axisFix.add(gltf.scene);
 
       const visual = new Group();

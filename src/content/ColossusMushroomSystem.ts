@@ -14,7 +14,7 @@ import type { BiomeRegistry } from '../config/biomes/index.ts';
 import type { Environment } from '../environment/Environment.ts';
 import type { DensityField } from '../world/density.ts';
 
-const ASSET_URL = './assets/biomes/safe-shallows/alien_colossus_mushroom_50m.glb';
+const ASSET_URL = './assets/biomes/safe-shallows/alien_colossus_mushroom_50m_redcap_v3.glb';
 
 // This is a navigation landmark, not scatter vegetation. Keep one specimen in a
 // fixed general direction from the starting area so players can learn the world by

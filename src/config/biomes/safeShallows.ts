@@ -52,11 +52,14 @@ export const SAFE_SHALLOWS: BiomeConfig = {
     weights: { pinnacle: 1, arch: 1, sinkhole: 0.8, mound: 1 },
   },
 
-  // Instances per 100 m^2. The GPU-instanced seagrass renderer can multiply this
-  // heavily from the boot density control without cloning meshes/materials.
+  // Instances per 100 m^2. Vegetation and large rocks are GPU-instanced, so the
+  // density values describe authored scatter rather than one draw call per prop.
   spawnDensity: {
     vegetation: 0.12,
-    rocks: 0,
+    // About two 3-4 m boulders per 64 m chunk on average. The rock system keeps
+    // only nearby instances submitted, so this stays cheap while breaking up the
+    // otherwise bare seabed silhouette.
+    rocks: 0.05,
     resources: 0,
     creatures: 0,
     structures: 0,

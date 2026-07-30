@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { BiomeConfig } from '../config/biomes/types.ts';
 import type { ChunkContentContext, ContentPopulator } from './ContentRegistry.ts';
 
-const ASSET_URL = './assets/biomes/safe-shallows/giant_alien_mushroom_10m.glb';
+const ASSET_URL = './assets/biomes/safe-shallows/giant_alien_mushroom_10m_redcap_v3.glb';
 const UP = new Vector3(0, 1, 0);
 
 // Keep these as occasional landmarks rather than carpeting the biome. The second

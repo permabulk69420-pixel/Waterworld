@@ -7,6 +7,20 @@
       "position": [0, 0.05, -24],
       "rotation": [0, 0, 0, 1],
       "scale": [1, 1, 1]
+    },
+    {
+      "id": "starter-snap-bulb-left",
+      "assetId": "snap-bulb",
+      "position": [-1.25, -6.3, -2.8],
+      "rotation": [0, -0.21644, 0, 0.9763],
+      "scale": [0.93, 0.93, 0.93]
+    },
+    {
+      "id": "starter-snap-bulb-right",
+      "assetId": "snap-bulb",
+      "position": [1.25, -6.3, -3.15],
+      "rotation": [0, 0.25882, 0, 0.96593],
+      "scale": [0.93, 0.93, 0.93]
     }
   ]
 }

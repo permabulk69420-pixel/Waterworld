@@ -4,6 +4,7 @@ import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { AlienFishSystem } from './content/AlienFishSystem.ts';
 import { ColossusMushroomSystem } from './content/ColossusMushroomSystem.ts';
+import { FruitMushroomSystem } from './content/FruitMushroomSystem.ts';
 import { GiantMushroomSystem } from './content/GiantMushroomSystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
@@ -19,7 +20,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V16-COLOSSUS-MUSHROOM';
+const BUILD_TAG = 'BUILD-MODE-V17-FRUIT-MUSHROOMS';
 
 /**
  * Bootstrap.
@@ -140,6 +141,16 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · loading VR hands`);
   await hands.ready;
 
+  const fruitMushrooms = new FruitMushroomSystem(
+    game.scene,
+    game.renderer,
+    hands,
+    mode,
+  );
+  game.content.register(fruitMushrooms);
+  settings.setStatus(`${BUILD_TAG} · loading harvestable fruit mushrooms`);
+  await fruitMushrooms.ready;
+
   const plankton = new BioluminescentPlankton(
     game.scene,
     game.environment,
@@ -221,26 +232,31 @@ async function bootstrap(): Promise<void> {
     build: BuildSystem;
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
+    fruitMushrooms: FruitMushroomSystem;
   }).game = game;
   (window as unknown as {
     game: Game;
     build: BuildSystem;
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
+    fruitMushrooms: FruitMushroomSystem;
   }).build = authoredWorld;
   (window as unknown as {
     game: Game;
     build: BuildSystem;
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
+    fruitMushrooms: FruitMushroomSystem;
   }).headlamp = headlamp;
   (window as unknown as {
     game: Game;
     build: BuildSystem;
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
+    fruitMushrooms: FruitMushroomSystem;
   }).plankton = plankton;
   (window as unknown as { snapBulbs: SnapBulbSystem }).snapBulbs = snapBulbs;
+  (window as unknown as { fruitMushrooms: FruitMushroomSystem }).fruitMushrooms = fruitMushrooms;
 
   await game.start((progress, label) => {
     bootFill.style.width = `${Math.round(progress * 100)}%`;
@@ -250,7 +266,7 @@ async function bootstrap(): Promise<void> {
   if (mode === 'build') {
     hint.textContent = 'BUILD · right-hand laser aims · right trigger selects · right grip grabs pointed prop · left trigger menu · A/X up · B/Y down';
   } else {
-    hint.textContent = 'STORY · tap either side of your head with a hand to toggle lamp · rear ledge: hold grip and pull';
+    hint.textContent = 'STORY · tap either side of your head with a hand to toggle lamp · grip hanging mushroom fruit to harvest · rear ledge: hold grip and pull';
   }
 
   boot.classList.add('hidden');

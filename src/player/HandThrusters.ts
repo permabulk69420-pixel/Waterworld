@@ -1,11 +1,14 @@
 import {
   DoubleSide,
+  DynamicDrawUsage,
   Group,
+  InstancedMesh,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
   Quaternion,
   Scene,
+  SphereGeometry,
   Vector3,
   type Object3D,
   type WebGLRenderer,
@@ -17,6 +20,7 @@ import type { Handedness, VRHands } from './VRHands.ts';
 
 const MOTOR_URL = './assets/player/motors/handheld_underwater_thruster.glb';
 const LOCAL_FORWARD = new Vector3(0, 0, -1);
+const LOCAL_BACK = new Vector3(0, 0, 1);
 const WORLD_UP = new Vector3(0, 1, 0);
 const PICKUP_RADIUS = 0.45;
 const PICKUP_RADIUS_SQ = PICKUP_RADIUS * PICKUP_RADIUS;
@@ -29,6 +33,22 @@ const XR_SPAWN_DELAY_FRAMES = 4;
 // gives a clearly moving blade pattern at 72/80/90/120 Hz while still reading fast.
 const PROPELLER_MAX_RAD_PER_SECOND = Math.PI * 2 * 7.3;
 const PROPELLER_RESPONSE = 18;
+
+// One low-poly instanced pool serves both motors. Bubbles are emitted from the
+// authored Propeller node, travel opposite thrust, then peel upward under buoyancy.
+// The pool is deliberately small so the effect stays cheap on standalone Quest.
+const BUBBLE_POOL_SIZE = 56;
+const BUBBLE_EMIT_PER_SECOND = 22;
+const BUBBLE_MIN_THROTTLE = 0.08;
+const BUBBLE_RADIUS = 0.022;
+const BUBBLE_LIFE_MIN = 0.48;
+const BUBBLE_LIFE_SPREAD = 0.5;
+const BUBBLE_BACK_SPEED_MIN = 0.24;
+const BUBBLE_BACK_SPEED_SPREAD = 0.22;
+const BUBBLE_UP_SPEED_MIN = 0.08;
+const BUBBLE_UP_SPEED_SPREAD = 0.12;
+const BUBBLE_DRAG = 1.15;
+const BUBBLE_BUOYANCY = 0.16;
 
 // GripPoint in the motor GLB is the point that belongs in the palm. The Quest raw
 // controller grip is closer to the wrist, so held motors parent to VRHands.objectGrip,
@@ -48,6 +68,7 @@ const _headQuaternion = new Quaternion();
 const _spawnForward = new Vector3();
 const _spawnRight = new Vector3();
 const _motorPosition = new Vector3();
+const _bubbleMatrix = new Matrix4();
 
 interface MotorPickup {
   root: Group;
@@ -55,6 +76,16 @@ interface MotorPickup {
   propeller: Object3D | null;
   throttle: number;
   propellerSpeed: number;
+  bubbleCarry: number;
+}
+
+interface BubbleParticle {
+  position: Vector3;
+  velocity: Vector3;
+  life: number;
+  maxLife: number;
+  size: number;
+  active: boolean;
 }
 
 /**
@@ -70,6 +101,11 @@ export class HandThrusters {
   private template: Object3D | null = null;
   private readonly motors: MotorPickup[] = [];
   private readonly previousSqueeze: Record<Handedness, number> = { left: 0, right: 0 };
+  private readonly bubbleGeometry: SphereGeometry;
+  private readonly bubbleMaterial: MeshBasicMaterial;
+  private readonly bubbleMesh: InstancedMesh;
+  private readonly bubbles: BubbleParticle[];
+  private bubbleCursor = 0;
   private disposed = false;
   private wasPresenting = false;
   private spawnDelayFrames = XR_SPAWN_DELAY_FRAMES;
@@ -82,6 +118,37 @@ export class HandThrusters {
     private readonly scene: Scene,
     private readonly rig: PlayerRig,
   ) {
+    this.bubbleGeometry = new SphereGeometry(BUBBLE_RADIUS, 6, 4);
+    this.bubbleMaterial = new MeshBasicMaterial({
+      color: 0xdff8ff,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      side: DoubleSide,
+      fog: true,
+    });
+    this.bubbleMesh = new InstancedMesh(
+      this.bubbleGeometry,
+      this.bubbleMaterial,
+      BUBBLE_POOL_SIZE,
+    );
+    this.bubbleMesh.name = 'hand-thruster-bubbles';
+    this.bubbleMesh.castShadow = false;
+    this.bubbleMesh.receiveShadow = false;
+    this.bubbleMesh.frustumCulled = false;
+    this.bubbleMesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    this.scene.add(this.bubbleMesh);
+
+    this.bubbles = Array.from({ length: BUBBLE_POOL_SIZE }, () => ({
+      position: new Vector3(),
+      velocity: new Vector3(),
+      life: 0,
+      maxLife: 1,
+      size: 1,
+      active: false,
+    }));
+    this.clearBubbles();
+
     this.ready = this.loadVisual();
   }
 
@@ -143,6 +210,7 @@ export class HandThrusters {
       this.spawnDelayFrames = XR_SPAWN_DELAY_FRAMES;
       this.spawnedForSession = false;
       this.clearMotors();
+      this.clearBubbles();
     }
 
     // Give Three/WebXR a few authoritative XR frames to populate camera.matrixWorld,
@@ -202,6 +270,7 @@ export class HandThrusters {
     }
 
     this.animatePropellers(dt);
+    this.updateBubbles(dt);
     this.locomotion.setPropulsionInput(_combined);
   }
 
@@ -221,6 +290,108 @@ export class HandThrusters {
           (motor.propeller.rotation.z + motor.propellerSpeed * dt) % (Math.PI * 2);
       }
     }
+  }
+
+  private updateBubbles(dt: number): void {
+    if (dt <= 0) return;
+
+    for (const motor of this.motors) {
+      if (!motor.heldBy || motor.throttle < BUBBLE_MIN_THROTTLE) {
+        motor.bubbleCarry = 0;
+        continue;
+      }
+
+      // Fractional carry keeps emission smooth at different Quest refresh rates and
+      // naturally makes a half-pulled trigger produce roughly half as many bubbles.
+      motor.bubbleCarry = Math.min(
+        motor.bubbleCarry + motor.throttle * BUBBLE_EMIT_PER_SECOND * dt,
+        4,
+      );
+      const emitCount = Math.floor(motor.bubbleCarry);
+      motor.bubbleCarry -= emitCount;
+      for (let i = 0; i < emitCount; i++) this.spawnBubble(motor);
+    }
+
+    const drag = Math.exp(-BUBBLE_DRAG * dt);
+    let matrixChanged = false;
+
+    for (let i = 0; i < this.bubbles.length; i++) {
+      const bubble = this.bubbles[i]!;
+      if (!bubble.active) continue;
+
+      bubble.life -= dt;
+      if (bubble.life <= 0) {
+        bubble.active = false;
+        _bubbleMatrix.makeScale(0, 0, 0);
+        this.bubbleMesh.setMatrixAt(i, _bubbleMatrix);
+        matrixChanged = true;
+        continue;
+      }
+
+      bubble.velocity.multiplyScalar(drag);
+      bubble.velocity.y += BUBBLE_BUOYANCY * dt;
+      bubble.position.addScaledVector(bubble.velocity, dt);
+
+      const age = 1 - bubble.life / bubble.maxLife;
+      const endShrink = Math.min(1, bubble.life / 0.14);
+      const scale = bubble.size * (0.72 + age * 0.55) * endShrink;
+      _bubbleMatrix.makeScale(scale, scale, scale);
+      _bubbleMatrix.setPosition(bubble.position);
+      this.bubbleMesh.setMatrixAt(i, _bubbleMatrix);
+      matrixChanged = true;
+    }
+
+    if (matrixChanged) this.bubbleMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  private spawnBubble(motor: MotorPickup): void {
+    const bubbleIndex = this.bubbleCursor;
+    const bubble = this.bubbles[bubbleIndex]!;
+    this.bubbleCursor = (this.bubbleCursor + 1) % this.bubbles.length;
+
+    const emitter = motor.propeller ?? motor.root;
+    emitter.updateWorldMatrix(true, false);
+    emitter.getWorldPosition(bubble.position);
+
+    // Use the motor root rather than the spinning Propeller quaternion. This keeps the
+    // exhaust direction stable while still taking the exact propeller position from the GLB.
+    motor.root.updateWorldMatrix(true, false);
+    motor.root.getWorldQuaternion(_worldQuat);
+    _direction.copy(LOCAL_BACK).applyQuaternion(_worldQuat).normalize();
+
+    bubble.position.addScaledVector(_direction, 0.025);
+    bubble.position.x += (Math.random() - 0.5) * 0.025;
+    bubble.position.y += (Math.random() - 0.5) * 0.018;
+    bubble.position.z += (Math.random() - 0.5) * 0.025;
+
+    bubble.velocity
+      .copy(_direction)
+      .multiplyScalar(BUBBLE_BACK_SPEED_MIN + Math.random() * BUBBLE_BACK_SPEED_SPREAD);
+    bubble.velocity.y += BUBBLE_UP_SPEED_MIN + Math.random() * BUBBLE_UP_SPEED_SPREAD;
+    bubble.velocity.x += (Math.random() - 0.5) * 0.08;
+    bubble.velocity.z += (Math.random() - 0.5) * 0.08;
+
+    bubble.maxLife = BUBBLE_LIFE_MIN + Math.random() * BUBBLE_LIFE_SPREAD;
+    bubble.life = bubble.maxLife;
+    bubble.size = 0.72 + Math.random() * 0.85;
+    bubble.active = true;
+
+    _bubbleMatrix.makeScale(bubble.size, bubble.size, bubble.size);
+    _bubbleMatrix.setPosition(bubble.position);
+    this.bubbleMesh.setMatrixAt(bubbleIndex, _bubbleMatrix);
+    this.bubbleMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  private clearBubbles(): void {
+    this.bubbleCursor = 0;
+    for (let i = 0; i < this.bubbles.length; i++) {
+      const bubble = this.bubbles[i]!;
+      bubble.active = false;
+      bubble.life = 0;
+      _bubbleMatrix.makeScale(0, 0, 0);
+      this.bubbleMesh.setMatrixAt(i, _bubbleMatrix);
+    }
+    this.bubbleMesh.instanceMatrix.needsUpdate = true;
   }
 
   private spawnNearTrackedHead(): void {
@@ -266,6 +437,7 @@ export class HandThrusters {
       propeller: root.getObjectByName('Propeller'),
       throttle: 0,
       propellerSpeed: 0,
+      bubbleCarry: 0,
     });
   }
 
@@ -321,6 +493,7 @@ export class HandThrusters {
     nearest.root.rotation.set(0, 0, HELD_MOTOR_ROLL);
     nearest.root.scale.set(1, 1, 1);
     nearest.heldBy = handedness;
+    nearest.bubbleCarry = 0;
   }
 
   private release(handedness: Handedness): void {
@@ -329,6 +502,7 @@ export class HandThrusters {
     this.scene.attach(motor.root);
     motor.heldBy = null;
     motor.throttle = 0;
+    motor.bubbleCarry = 0;
   }
 
   private motorHeldBy(handedness: Handedness): MotorPickup | null {
@@ -342,6 +516,7 @@ export class HandThrusters {
       this.previousSqueeze[handedness] = 0;
     }
     this.clearMotors();
+    this.clearBubbles();
     this.spawnedForSession = false;
     this.spawnDelayFrames = XR_SPAWN_DELAY_FRAMES;
   }
@@ -355,6 +530,10 @@ export class HandThrusters {
     this.disposed = true;
     this.locomotion.clearPropulsionInput();
     this.clearMotors();
+    this.clearBubbles();
+    this.bubbleMesh.removeFromParent();
+    this.bubbleGeometry.dispose();
+    this.bubbleMaterial.dispose();
 
     this.template?.traverse((object) => {
       if (!(object instanceof Mesh)) return;

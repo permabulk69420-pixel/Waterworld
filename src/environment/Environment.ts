@@ -33,8 +33,8 @@ export class Environment {
 
   private readonly fog: FogExp2;
   private readonly dayAir = new Color(0xb9c9cd);
-  private readonly nightAir = new Color(0x010309);
-  private readonly nightWater = new Color(0x01070c);
+  private readonly nightAir = new Color(0x000104);
+  private readonly nightWater = new Color(0x000204);
   private readonly dayZenith = new Color(0x5d86a4);
   private readonly dayHorizon = new Color(0xb9c9cd);
   private readonly nightZenith = new Color(0x000208);
@@ -116,12 +116,13 @@ export class Environment {
     const depthColorT = Math.pow(depthT, 1.45);
     const nightFactor = 1 - this.daylight;
 
-    // Night visibility now comes primarily from lack of light rather than extra haze.
-    // Push the water/background much darker, but keep silhouettes alive farther away.
+    // At night the far field should disappear into near-black water, not flatten
+    // into the biome's daytime teal/grey fog colour. Keep only a trace of the
+    // local water hue at shallow depth so silhouettes still have some shape.
     this.tmpColor.copy(this.shallowWater);
     this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24 * this.daylight);
     this.tmpColor.lerp(this.deepWater, depthColorT);
-    this.tmpColor.lerp(this.nightWater, nightFactor * (0.9 + depthT * 0.06));
+    this.tmpColor.lerp(this.nightWater, nightFactor * (0.985 + depthT * 0.015));
     this.tmpColor.lerp(this.tmpAir, 1 - this.submergence);
     this.fog.color.copy(this.tmpColor);
     if (this.scene.background instanceof Color) this.scene.background.copy(this.tmpColor);
@@ -129,9 +130,9 @@ export class Environment {
     const waterDensity =
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
-    // Full night is ~20% less fog-dense than daytime. Darkness, not soup, should be
-    // the main visibility barrier so torch/headlights reveal real distant geometry.
-    const nightDensity = waterDensity * (1 - 0.2 * nightFactor);
+    // A slightly stronger *dark* extinction at night makes distant geometry fall
+    // away rather than remaining as a bright grey silhouette.
+    const nightDensity = waterDensity * (1 + 0.05 * nightFactor);
     this.fog.density = 0.0016 + (nightDensity - 0.0016) * this.submergence;
 
     this.lighting.update(

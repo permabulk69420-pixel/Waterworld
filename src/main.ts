@@ -21,7 +21,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V18-SPEARGUN';
+const BUILD_TAG = 'BUILD-MODE-V19-SHALLOW-DAYLIGHT';
 
 /**
  * Bootstrap.

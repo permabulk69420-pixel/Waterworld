@@ -26,13 +26,24 @@ const ASSET_URL = './assets/fauna/prism_disc_glow_fish_animated.glb';
 // firmly in the little tropical-fish range even if a later export changes scale.
 const TARGET_MAX_DIMENSION = 0.25;
 const MAX_RANDOM_SCALE = 1.06;
-const FISH_COUNT = 12;
-const SCHOOL_SIZE = 3;
+
+// Stream schools by world cell rather than keeping a fixed boot-time population.
+// The wide hysteresis between the 52 m population bubble and 80 m retirement
+// radius is deliberate: old schools linger well behind the player while new
+// schools enter far away, making recycling practically impossible to notice.
+const CELL_SIZE = 14;
+const SPAWN_CHANCE = 0.42;
+const INITIAL_SPAWN_MIN_RADIUS = 7;
+const STREAM_SPAWN_MIN_RADIUS = 32;
+const POPULATION_RADIUS = 52;
+const RETIRE_RADIUS = 80;
+const LOCAL_TARGET = 15;
+const MAX_ACTIVE = 24;
+const POPULATION_REFRESH_SECONDS = 0.75;
+const SCHOOL_SIZE_MIN = 2;
+const SCHOOL_SIZE_MAX = 3;
 const SCHOOL_SPREAD = 1.25;
 
-const SPAWN_MIN_RADIUS = 5;
-const SPAWN_MAX_RADIUS = 14;
-const RECYCLE_DISTANCE = 30;
 const WANDER_RADIUS = 4.5;
 const FLEE_DISTANCE = 1.7;
 const CALM_DISTANCE = 3.4;
@@ -49,6 +60,13 @@ const _desired = new Vector3();
 const _next = new Vector3();
 const _lookTarget = new Vector3();
 const _size = new Vector3();
+
+function hash01(x: number, z: number, salt: number): number {
+  let h = Math.imul(x, 374761393) ^ Math.imul(z, 668265263) ^ Math.imul(salt, 1442695041);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967295;
+}
 
 type FishState = 'cruise' | 'idle' | 'flee';
 
@@ -67,28 +85,31 @@ interface FishInstance {
   fleeTimer: number;
   cruiseSpeed: number;
   phase: number;
-  active: boolean;
+  cellKey: string | null;
 }
 
 /**
  * Small animated ambient fish for the Safe Shallows.
  *
- * A modest pool of independently animated fish is recycled around the player.
- * They appear in loose groups of roughly three, but every fish has independent
- * speed, animation timing, wandering and flee response so the groups never move
- * like a synchronized school. The GLB has several meshes, so the count stays
- * intentionally conservative for standalone Quest 3.
+ * Schools are streamed from deterministic world cells instead of existing as a
+ * fixed set attached to the player. A large retain radius keeps schools alive
+ * behind the player, while replacements enter far ahead. Individual fish keep
+ * their existing wander, idle, glow and close-range scurry behaviour.
  */
 export class PrismFishSystem {
   readonly ready: Promise<void>;
 
-  private readonly fish: FishInstance[] = [];
+  private readonly activeSchools = new Map<string, FishInstance[]>();
+  private readonly pool: FishInstance[] = [];
+  private readonly allFish: FishInstance[] = [];
   private readonly lookHelper = new Object3D();
   private readonly glowColor = new Color();
   private template: Object3D | null = null;
   private clips: AnimationClip[] = [];
   private baseScale = 1;
   private loadFailed = false;
+  private populationTimer = 0;
+  private populationInitialized = false;
 
   constructor(
     private readonly scene: Scene,
@@ -116,11 +137,9 @@ export class PrismFishSystem {
 
       this.baseScale = TARGET_MAX_DIMENSION / rawMaxDimension;
 
-      for (let i = 0; i < FISH_COUNT; i++) this.createFish(i);
-
       console.info(
         `[fauna] prism fish loaded: raw ${_size.x.toFixed(2)} x ${_size.y.toFixed(2)} x ${_size.z.toFixed(2)} m; ` +
-          `display max ${(TARGET_MAX_DIMENSION * MAX_RANDOM_SCALE).toFixed(2)} m; count ${FISH_COUNT}`,
+          `display max ${(TARGET_MAX_DIMENSION * MAX_RANDOM_SCALE).toFixed(2)} m; streamed population`,
       );
     } catch (error) {
       this.loadFailed = true;
@@ -128,8 +147,8 @@ export class PrismFishSystem {
     }
   }
 
-  private createFish(index: number): void {
-    if (!this.template) return;
+  private createFish(): FishInstance {
+    if (!this.template) throw new Error('prism fish template unavailable');
 
     const model = this.template.clone(true);
     const scaleVariation = MathUtils.lerp(0.88, MAX_RANDOM_SCALE, Math.random());
@@ -157,7 +176,7 @@ export class PrismFishSystem {
     });
 
     const root = new Group();
-    root.name = `fauna:prism-fish-${index}`;
+    root.name = `fauna:prism-fish-${this.allFish.length}`;
     root.visible = false;
     root.add(model);
     this.scene.add(root);
@@ -181,14 +200,19 @@ export class PrismFishSystem {
       fleeTimer: 0,
       cruiseSpeed: MathUtils.lerp(CRUISE_SPEED_MIN, CRUISE_SPEED_MAX, Math.random()),
       phase: Math.random() * Math.PI * 2,
-      active: false,
+      cellKey: null,
     };
 
-    this.fish.push(fish);
+    this.allFish.push(fish);
+    return fish;
+  }
+
+  private acquireFish(): FishInstance {
+    return this.pool.pop() ?? this.createFish();
   }
 
   update(dt: number, elapsed: number): void {
-    if (this.loadFailed || this.fish.length === 0) return;
+    if (this.loadFailed || !this.template) return;
 
     dt = Math.min(Math.max(dt, 0), 0.05);
     this.rig.getHeadPosition(_player);
@@ -196,146 +220,228 @@ export class PrismFishSystem {
     const playerBiome = this.biomes.biomeAt(_player.x, _player.z);
     const shouldBeActive = playerBiome.id === 'SAFE_SHALLOWS' && this.environment.underwater;
 
-    for (let i = 0; i < this.fish.length; i++) {
-      const fish = this.fish[i];
-      fish.mixer.update(dt);
+    this.populationTimer -= dt;
+    if (this.populationTimer <= 0) {
+      this.populationTimer = POPULATION_REFRESH_SECONDS;
+      this.refreshPopulation(shouldBeActive);
+    }
 
-      if (!shouldBeActive) {
-        fish.root.visible = false;
-        fish.active = false;
-        continue;
+    for (const school of this.activeSchools.values()) {
+      for (const fish of school) {
+        fish.mixer.update(dt);
+        this.updateFish(fish, dt, elapsed);
       }
-
-      if (!fish.active) {
-        this.placeNearPlayer(fish, i);
-        continue;
-      }
-
-      const playerDistanceSq = fish.root.position.distanceToSquared(_player);
-      if (playerDistanceSq > RECYCLE_DISTANCE * RECYCLE_DISTANCE) {
-        this.placeNearPlayer(fish, i);
-        continue;
-      }
-
-      const playerDistance = Math.sqrt(playerDistanceSq);
-      if (playerDistance < FLEE_DISTANCE) {
-        fish.fleeTimer = 1.0;
-        this.enterState(fish, 'flee');
-        _desired.copy(fish.root.position).sub(_player);
-        _desired.y *= 0.35;
-        if (_desired.lengthSq() < 0.0001) _desired.set(Math.random() - 0.5, 0.1, Math.random() - 0.5);
-        _desired.normalize();
-        fish.direction.lerp(_desired, 1 - Math.exp(-10 * dt)).normalize();
-      } else if (fish.state === 'flee') {
-        fish.fleeTimer -= dt;
-        if (fish.fleeTimer <= 0 && playerDistance > CALM_DISTANCE) {
-          fish.home.copy(fish.root.position);
-          this.pickTarget(fish);
-          this.enterState(fish, 'cruise');
-        }
-      } else {
-        fish.stateTimer -= dt;
-
-        if (fish.state === 'idle') {
-          if (fish.stateTimer <= 0) {
-            this.pickTarget(fish);
-            this.enterState(fish, 'cruise');
-          }
-        } else {
-          _desired.copy(fish.target).sub(fish.root.position);
-          if (_desired.lengthSq() > 0.0001) {
-            _desired.normalize();
-            _desired.x += Math.sin(elapsed * 1.1 + fish.phase) * 0.035;
-            _desired.y += Math.sin(elapsed * 1.45 + fish.phase * 1.7) * 0.018;
-            _desired.z += Math.cos(elapsed * 0.95 + fish.phase * 0.8) * 0.035;
-            _desired.normalize();
-            fish.direction.lerp(_desired, 1 - Math.exp(-2.2 * dt)).normalize();
-          }
-
-          if (fish.root.position.distanceToSquared(fish.target) < 0.35 * 0.35 || fish.stateTimer <= 0) {
-            if (Math.random() < 0.25) this.enterState(fish, 'idle');
-            else {
-              this.pickTarget(fish);
-              fish.stateTimer = MathUtils.lerp(2.4, 5.2, Math.random());
-            }
-          }
-        }
-      }
-
-      const speed = fish.state === 'flee' ? FLEE_SPEED : fish.state === 'idle' ? IDLE_SPEED : fish.cruiseSpeed;
-      _next.copy(fish.root.position).addScaledVector(fish.direction, speed * dt);
-
-      const seabed = this.density.seabedAt(_next.x, _next.z);
-      const minY = seabed + MIN_BOTTOM_CLEARANCE;
-      const maxY = this.environment.seaLevel - SURFACE_CLEARANCE;
-      _next.y = MathUtils.clamp(_next.y, minY, maxY);
-
-      if (minY >= maxY || this.density.sample(_next.x, _next.y, _next.z) > 0) {
-        fish.direction.multiplyScalar(-1);
-        this.pickTarget(fish);
-      } else {
-        fish.root.position.copy(_next);
-      }
-
-      this.faceDirection(fish, dt);
-      this.updateGlow(fish, elapsed);
     }
   }
 
-  private placeNearPlayer(fish: FishInstance, index: number): void {
-    const schoolCount = Math.ceil(this.fish.length / SCHOOL_SIZE);
-    const schoolIndex = Math.floor(index / SCHOOL_SIZE);
-    const memberIndex = index % SCHOOL_SIZE;
+  private refreshPopulation(shouldPopulate: boolean): void {
+    if (!shouldPopulate) {
+      for (const key of [...this.activeSchools.keys()]) this.releaseSchool(key);
+      this.populationInitialized = false;
+      return;
+    }
 
-    // Give each little group a stable sector around the player, then scatter the
-    // individual members inside that sector. This reads as loose schooling without
-    // any expensive flocking simulation or synchronized steering.
-    const schoolAngle = (schoolIndex / Math.max(1, schoolCount)) * Math.PI * 2 + 0.38;
-    const radiusT = schoolCount <= 1 ? 0.5 : schoolIndex / (schoolCount - 1);
-    const schoolRadius = MathUtils.lerp(SPAWN_MIN_RADIUS + 1.5, SPAWN_MAX_RADIUS - 1.0, radiusT);
-    const memberArc = (memberIndex - (SCHOOL_SIZE - 1) * 0.5) * 0.1;
+    const retireDistanceSq = RETIRE_RADIUS * RETIRE_RADIUS;
+    for (const [key, school] of [...this.activeSchools]) {
+      if (school.every((fish) => fish.root.position.distanceToSquared(_player) > retireDistanceSq)) {
+        this.releaseSchool(key);
+      }
+    }
 
-    for (let attempt = 0; attempt < 14; attempt++) {
-      const angle = schoolAngle + memberArc + (Math.random() - 0.5) * 0.18;
-      const radius = MathUtils.clamp(
-        schoolRadius + (Math.random() - 0.5) * SCHOOL_SPREAD * 2,
-        SPAWN_MIN_RADIUS,
-        SPAWN_MAX_RADIUS,
-      );
-      const x = _player.x + Math.cos(angle) * radius;
-      const z = _player.z + Math.sin(angle) * radius;
-      if (this.biomes.biomeAt(x, z).id !== 'SAFE_SHALLOWS') continue;
+    let activeCount = this.activeFishCount();
+    let localCount = this.localFishCount();
+    if (activeCount >= MAX_ACTIVE || localCount >= LOCAL_TARGET) {
+      this.populationInitialized = true;
+      return;
+    }
 
+    const pcx = Math.floor(_player.x / CELL_SIZE);
+    const pcz = Math.floor(_player.z / CELL_SIZE);
+    const cellRadius = Math.ceil(POPULATION_RADIUS / CELL_SIZE);
+    const minimumRadius = this.populationInitialized ? STREAM_SPAWN_MIN_RADIUS : INITIAL_SPAWN_MIN_RADIUS;
+    const candidates: Array<{ cx: number; cz: number; distanceSq: number }> = [];
+
+    for (let dz = -cellRadius; dz <= cellRadius; dz++) {
+      for (let dx = -cellRadius; dx <= cellRadius; dx++) {
+        const cx = pcx + dx;
+        const cz = pcz + dz;
+        const centerX = (cx + 0.5) * CELL_SIZE + (hash01(cx, cz, 11) - 0.5) * CELL_SIZE * 0.7;
+        const centerZ = (cz + 0.5) * CELL_SIZE + (hash01(cx, cz, 17) - 0.5) * CELL_SIZE * 0.7;
+        const distanceSq = (centerX - _player.x) ** 2 + (centerZ - _player.z) ** 2;
+        if (distanceSq < minimumRadius ** 2 || distanceSq > POPULATION_RADIUS ** 2) continue;
+        if (hash01(cx, cz, 23) > SPAWN_CHANCE) continue;
+        const key = `${cx},${cz}`;
+        if (this.activeSchools.has(key)) continue;
+        candidates.push({ cx, cz, distanceSq });
+      }
+    }
+
+    // First load fills from nearby cells so there is life around the spawn. Later
+    // fills prefer the outer edge, putting replacement schools in before the player
+    // reaches them instead of visibly materialising nearby.
+    candidates.sort((a, b) =>
+      this.populationInitialized ? b.distanceSq - a.distanceSq : a.distanceSq - b.distanceSq,
+    );
+
+    for (const candidate of candidates) {
+      if (activeCount >= MAX_ACTIVE || localCount >= LOCAL_TARGET) break;
+      const spawned = this.spawnCell(candidate.cx, candidate.cz, MAX_ACTIVE - activeCount);
+      activeCount += spawned;
+      localCount += spawned;
+    }
+
+    this.populationInitialized = true;
+  }
+
+  private spawnCell(cx: number, cz: number, capacity: number): number {
+    if (capacity <= 0) return 0;
+    const key = `${cx},${cz}`;
+    if (this.activeSchools.has(key)) return 0;
+
+    const centerX = (cx + 0.5) * CELL_SIZE + (hash01(cx, cz, 11) - 0.5) * CELL_SIZE * 0.7;
+    const centerZ = (cz + 0.5) * CELL_SIZE + (hash01(cx, cz, 17) - 0.5) * CELL_SIZE * 0.7;
+    if (this.biomes.biomeAt(centerX, centerZ).id !== 'SAFE_SHALLOWS') return 0;
+
+    const desiredSize = SCHOOL_SIZE_MIN + Math.floor(hash01(cx, cz, 29) * (SCHOOL_SIZE_MAX - SCHOOL_SIZE_MIN + 1));
+    const schoolSize = Math.min(desiredSize, capacity);
+    const school: FishInstance[] = [];
+
+    for (let member = 0; member < schoolSize; member++) {
+      const angle = hash01(cx, cz, 41 + member * 7) * Math.PI * 2;
+      const radius = Math.sqrt(hash01(cx, cz, 43 + member * 7)) * SCHOOL_SPREAD;
+      const x = centerX + Math.cos(angle) * radius;
+      const z = centerZ + Math.sin(angle) * radius;
       const seabed = this.density.seabedAt(x, z);
       const minY = seabed + 1.0;
       const maxY = Math.min(this.environment.seaLevel - SURFACE_CLEARANCE, seabed + 4.5);
       if (maxY <= minY) continue;
 
-      const y = MathUtils.lerp(minY, maxY, Math.random());
+      const y = MathUtils.lerp(minY, maxY, hash01(cx, cz, 47 + member * 7));
       if (this.density.sample(x, y, z) > 0) continue;
 
+      const fish = this.acquireFish();
+      fish.cellKey = key;
       fish.root.position.set(x, y, z);
       fish.home.copy(fish.root.position);
       fish.direction
         .set(
           Math.cos(angle + Math.PI * 0.5),
-          (Math.random() - 0.5) * 0.12,
+          (hash01(cx, cz, 53 + member * 7) - 0.5) * 0.12,
           Math.sin(angle + Math.PI * 0.5),
         )
         .normalize();
-      fish.active = true;
       fish.root.visible = true;
       fish.state = 'cruise';
-      fish.stateTimer = MathUtils.lerp(2.5, 5.0, Math.random());
+      fish.stateTimer = MathUtils.lerp(2.5, 5.0, hash01(cx, cz, 59 + member * 7));
       fish.fleeTimer = 0;
+      fish.currentAction = null;
       this.pickTarget(fish);
       this.playBest(fish, ['Swim_Cruise', 'Swim_Loop'], 0.05, MathUtils.lerp(0.9, 1.08, Math.random()));
       this.faceDirection(fish, 1);
-      return;
+      school.push(fish);
     }
 
-    fish.root.visible = false;
-    fish.active = false;
+    if (school.length === 0) return 0;
+    this.activeSchools.set(key, school);
+    return school.length;
+  }
+
+  private releaseSchool(key: string): void {
+    const school = this.activeSchools.get(key);
+    if (!school) return;
+    this.activeSchools.delete(key);
+
+    for (const fish of school) {
+      fish.cellKey = null;
+      fish.root.visible = false;
+      fish.currentAction?.stop();
+      fish.currentAction = null;
+      this.pool.push(fish);
+    }
+  }
+
+  private activeFishCount(): number {
+    let count = 0;
+    for (const school of this.activeSchools.values()) count += school.length;
+    return count;
+  }
+
+  private localFishCount(): number {
+    const localDistanceSq = POPULATION_RADIUS * POPULATION_RADIUS;
+    let count = 0;
+    for (const school of this.activeSchools.values()) {
+      for (const fish of school) {
+        if (fish.root.position.distanceToSquared(_player) <= localDistanceSq) count++;
+      }
+    }
+    return count;
+  }
+
+  private updateFish(fish: FishInstance, dt: number, elapsed: number): void {
+    const playerDistanceSq = fish.root.position.distanceToSquared(_player);
+    const playerDistance = Math.sqrt(playerDistanceSq);
+
+    if (playerDistance < FLEE_DISTANCE) {
+      fish.fleeTimer = 1.0;
+      this.enterState(fish, 'flee');
+      _desired.copy(fish.root.position).sub(_player);
+      _desired.y *= 0.35;
+      if (_desired.lengthSq() < 0.0001) _desired.set(Math.random() - 0.5, 0.1, Math.random() - 0.5);
+      _desired.normalize();
+      fish.direction.lerp(_desired, 1 - Math.exp(-10 * dt)).normalize();
+    } else if (fish.state === 'flee') {
+      fish.fleeTimer -= dt;
+      if (fish.fleeTimer <= 0 && playerDistance > CALM_DISTANCE) {
+        fish.home.copy(fish.root.position);
+        this.pickTarget(fish);
+        this.enterState(fish, 'cruise');
+      }
+    } else {
+      fish.stateTimer -= dt;
+
+      if (fish.state === 'idle') {
+        if (fish.stateTimer <= 0) {
+          this.pickTarget(fish);
+          this.enterState(fish, 'cruise');
+        }
+      } else {
+        _desired.copy(fish.target).sub(fish.root.position);
+        if (_desired.lengthSq() > 0.0001) {
+          _desired.normalize();
+          _desired.x += Math.sin(elapsed * 1.1 + fish.phase) * 0.035;
+          _desired.y += Math.sin(elapsed * 1.45 + fish.phase * 1.7) * 0.018;
+          _desired.z += Math.cos(elapsed * 0.95 + fish.phase * 0.8) * 0.035;
+          _desired.normalize();
+          fish.direction.lerp(_desired, 1 - Math.exp(-2.2 * dt)).normalize();
+        }
+
+        if (fish.root.position.distanceToSquared(fish.target) < 0.35 * 0.35 || fish.stateTimer <= 0) {
+          if (Math.random() < 0.25) this.enterState(fish, 'idle');
+          else {
+            this.pickTarget(fish);
+            fish.stateTimer = MathUtils.lerp(2.4, 5.2, Math.random());
+          }
+        }
+      }
+    }
+
+    const speed = fish.state === 'flee' ? FLEE_SPEED : fish.state === 'idle' ? IDLE_SPEED : fish.cruiseSpeed;
+    _next.copy(fish.root.position).addScaledVector(fish.direction, speed * dt);
+
+    const seabed = this.density.seabedAt(_next.x, _next.z);
+    const minY = seabed + MIN_BOTTOM_CLEARANCE;
+    const maxY = this.environment.seaLevel - SURFACE_CLEARANCE;
+    _next.y = MathUtils.clamp(_next.y, minY, maxY);
+
+    if (minY >= maxY || this.density.sample(_next.x, _next.y, _next.z) > 0) {
+      fish.direction.multiplyScalar(-1);
+      this.pickTarget(fish);
+    } else {
+      fish.root.position.copy(_next);
+    }
+
+    this.faceDirection(fish, dt);
+    this.updateGlow(fish, elapsed);
   }
 
   private pickTarget(fish: FishInstance): void {
@@ -438,7 +544,9 @@ export class PrismFishSystem {
   }
 
   dispose(): void {
-    for (const fish of this.fish) {
+    this.activeSchools.clear();
+    this.pool.length = 0;
+    for (const fish of this.allFish) {
       fish.mixer.stopAllAction();
       fish.root.traverse((object) => {
         if (!(object instanceof Mesh)) return;
@@ -447,6 +555,6 @@ export class PrismFishSystem {
       });
       fish.root.removeFromParent();
     }
-    this.fish.length = 0;
+    this.allFish.length = 0;
   }
 }

@@ -43,6 +43,8 @@ export class Lighting {
   /**
    * @param submergence 0 above the surface, 1 fully underwater
    * @param depthT      0 at the surface, 1 at the biome's maximum depth
+   * @param shallowWater shallow-water biome colour
+   * @param deepWater deep-water biome colour
    * @param daylight    0 at full night, 1 in full daylight
    * @param twilight    0 at deep night, 1 once the sun is around/above the horizon
    */
@@ -55,30 +57,40 @@ export class Lighting {
     twilight = 1,
   ): void {
     const attenuation = 1 - 0.44 * depthT;
+    // Bright tropical shallows need a lot more diffuse skylight than deep water.
+    // Fade the boost aggressively with depth so caves/deeper biomes keep contrast.
+    const shallowDay = submergence * daylight * Math.pow(1 - depthT, 1.5);
 
     this.daySun.copy(this.sunsetSunColor).lerp(this.surfaceSunColor, daylight);
     this.sun.color.copy(this.daySun).lerp(this.deepSunColor, submergence * 0.7);
-    const sunDayIntensity = (2.4 * (1 - submergence) + 1.75 * submergence) * attenuation;
+    const sunDayIntensity =
+      (2.4 * (1 - submergence) + 1.85 * submergence + 0.18 * shallowDay) * attenuation;
     // Keep a vanishingly small floor only to avoid hard numerical black. Player
     // lights should dominate underwater at full night.
     this.sun.intensity = 0.0015 + sunDayIntensity * daylight;
 
     this.daySky.copy(this.nightSkyColor).lerp(this.surfaceSkyColor, twilight);
-    this.hemisphere.color.copy(this.daySky).lerp(shallowWater, submergence * 0.72 * twilight);
+    // Near the surface keep more neutral sky colour in the fill. The previous 72%
+    // teal blend made colourful PBR fauna read almost black unless the headlamp hit it.
+    const skyWaterTint = submergence * twilight * (0.48 + 0.24 * depthT);
+    this.hemisphere.color.copy(this.daySky).lerp(shallowWater, skyWaterTint);
 
     this.dayGround.copy(this.nightGroundColor).lerp(this.surfaceGroundColor, twilight);
     this.caveFill.copy(deepWater).lerp(shallowWater, 0.46);
+    const groundWaterTint = submergence * twilight * (0.5 + 0.22 * depthT);
     this.hemisphere.groundColor
       .copy(this.dayGround)
-      .lerp(this.caveFill, submergence * 0.72 * twilight);
+      .lerp(this.caveFill, groundWaterTint);
 
-    const hemiDayIntensity = (1.1 * (1 - submergence) + 0.92 * submergence) * attenuation;
-    // The former night floor still lifted distant terrain into a grey/teal wash.
-    // Full night now has only a tiny sky floor; twilight/daylight ramp normally.
+    const hemiDayIntensity =
+      ((1.1 * (1 - submergence) + 0.98 * submergence) * attenuation) + 0.42 * shallowDay;
+    // Full night still collapses almost completely; the extra fill exists only while
+    // daylight is actually reaching shallow water.
     this.hemisphere.intensity = 0.004 + hemiDayIntensity * (0.008 + 0.992 * twilight);
 
-    this.ambient.color.copy(this.caveFill);
-    this.ambient.intensity = submergence * attenuation * (0.003 + 0.517 * daylight);
+    this.ambient.color.copy(this.caveFill).lerp(this.surfaceSkyColor, 0.26 * shallowDay);
+    this.ambient.intensity =
+      submergence * attenuation * (0.003 + (0.62 + 0.28 * shallowDay) * daylight);
   }
 
   /** Keeps the directional light centred so it never runs out of range. */

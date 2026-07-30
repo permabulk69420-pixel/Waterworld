@@ -3,6 +3,7 @@ import { BuildSystem } from './build/BuildSystem.ts';
 import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { AlienFishSystem } from './content/AlienFishSystem.ts';
+import { ColossusMushroomSystem } from './content/ColossusMushroomSystem.ts';
 import { GiantMushroomSystem } from './content/GiantMushroomSystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
@@ -18,7 +19,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V15-GIANT-MUSHROOMS';
+const BUILD_TAG = 'BUILD-MODE-V16-COLOSSUS-MUSHROOM';
 
 /**
  * Bootstrap.
@@ -95,6 +96,15 @@ async function bootstrap(): Promise<void> {
   game.content.register(giantMushrooms);
   settings.setStatus(`${BUILD_TAG} · loading giant alien mushrooms`);
   await giantMushrooms.ready;
+
+  const colossusMushroom = new ColossusMushroomSystem(
+    game.scene,
+    game.density,
+    game.biomes,
+    game.environment,
+  );
+  settings.setStatus(`${BUILD_TAG} · loading colossus mushroom landmark`);
+  await colossusMushroom.ready;
 
   const prismFish = new PrismFishSystem(
     game.scene,
@@ -198,6 +208,7 @@ async function bootstrap(): Promise<void> {
     alienFish.update(dt, elapsed);
     octopusCrabs.update(dt);
     plankton.update(dt, elapsed);
+    colossusMushroom.update(elapsed);
     // Run after the motors so an anchored hand can cancel propulsion for the
     // current frame while the player physically pulls against the rear ledge.
     rearClimb?.update();

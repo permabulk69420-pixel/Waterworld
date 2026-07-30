@@ -34,7 +34,6 @@ interface BuildInternals {
   raycaster: Raycaster;
   pointerLine: Line;
   objects: Map<string, RuntimeObject>;
-  selectedId: string | null;
   assetById(assetId: string): BuildAssetDefinitionRuntime | null;
   rayFromHand(handedness: Handedness): boolean;
   select(id: string | null): void;
@@ -96,6 +95,7 @@ export function installBuildSelectionAssist(build: BuildSystem): void {
 
   const findTarget = (): PointerTarget | null => {
     if (!editor.rayFromHand('right')) return null;
+    editor.raycaster.far = POINTER_LENGTH;
 
     let best: PointerTarget | null = null;
 

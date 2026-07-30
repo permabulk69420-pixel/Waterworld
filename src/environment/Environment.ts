@@ -114,15 +114,12 @@ export class Environment {
 
     const depthT = saturate(this.depth / this.maxDepth);
     const depthColorT = Math.pow(depthT, 1.45);
-    const nightFactor = 1 - this.daylight;
 
-    // At night the far field should disappear into near-black water, not flatten
-    // into the biome's daytime teal/grey fog colour. Keep only a trace of the
-    // local water hue at shallow depth so silhouettes still have some shape.
+    // Underwater fog colour is depth/biome driven only. Day/night should change
+    // lighting, not tint the haze black or otherwise alter underwater visibility.
     this.tmpColor.copy(this.shallowWater);
-    this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24 * this.daylight);
+    this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24);
     this.tmpColor.lerp(this.deepWater, depthColorT);
-    this.tmpColor.lerp(this.nightWater, nightFactor * (0.985 + depthT * 0.015));
     this.tmpColor.lerp(this.tmpAir, 1 - this.submergence);
     this.fog.color.copy(this.tmpColor);
     if (this.scene.background instanceof Color) this.scene.background.copy(this.tmpColor);
@@ -130,7 +127,7 @@ export class Environment {
     const waterDensity =
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
-    // Fog density is depth-driven only; day/night changes colour and lighting,
+    // Fog density is depth-driven only; day/night changes lighting,
     // not visibility distance.
     this.fog.density = 0.0016 + (waterDensity - 0.0016) * this.submergence;
 

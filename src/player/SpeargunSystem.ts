@@ -19,6 +19,14 @@ const ASSET_URL = './assets/player/motors/alien_onehand_speargun_v4.glb';
 const LOCAL_FORWARD = new Vector3(0, 0, -1);
 const WORLD_UP = new Vector3(0, 1, 0);
 
+// The authored gun read too large in-hand. Keep the helper alignment intact but make
+// the complete tool (including the loaded/fired spear) 40% smaller.
+const TOOL_SCALE = 0.6;
+// The barrel direction was already correct, but the body hung below the palm. A
+// 180-degree roll around local Z preserves local -Z aim while putting the gun above
+// the hand instead of underneath it.
+const HELD_ROLL = Math.PI;
+
 const PICKUP_RADIUS = 0.5;
 const PICKUP_RADIUS_SQ = PICKUP_RADIUS * PICKUP_RADIUS;
 const GRIP_THRESHOLD = 0.55;
@@ -35,11 +43,22 @@ const SPEAR_MAX_LIFETIME = 2.3;
 const SPEAR_HIT_HOLD_SECONDS = 0.7;
 const AUTO_RELOAD_SECONDS = 1.15;
 const SPEAR_COLLISION_PADDING = 0.055;
+const SPEAR_PENETRATION = 0.07;
+
+// Speared fish are simple kinematic carcasses rather than full rigid bodies. That is
+// cheaper and more predictable on Quest: impact carries a little momentum, water drag
+// damps it, negative buoyancy pulls the fish down, and the seabed height settles it.
+const CARCASS_SINK_ACCELERATION = 0.38;
+const CARCASS_WATER_DRAG = 0.7;
+const CARCASS_REST_SECONDS = 12;
+const CARCASS_MAX_DRIFT_SPEED = 0.55;
 
 // Runtime fish radii follow the actual displayed sizes: ~0.25 m prism fish and
 // ~0.74 m larger alien fish. They are deliberately a little generous in VR.
 const PRISM_HIT_RADIUS = 0.16 + SPEAR_COLLISION_PADDING;
 const ALIEN_HIT_RADIUS = 0.39 + SPEAR_COLLISION_PADDING;
+const PRISM_FLOOR_CLEARANCE = 0.13;
+const ALIEN_FLOOR_CLEARANCE = 0.32;
 
 const _gripLocal = new Matrix4();
 const _worldMatrix = new Matrix4();
@@ -58,6 +77,7 @@ const _segment = new Vector3();
 const _pointDelta = new Vector3();
 const _closest = new Vector3();
 const _fishPosition = new Vector3();
+const _impactDirection = new Vector3();
 
 interface FishActionLike {
   stop(): unknown;
@@ -88,12 +108,14 @@ interface AlienFishRuntime {
 interface FishHit {
   t: number;
   species: 'prism' | 'alien';
-  commit: () => void;
+  root: Object3D;
+  floorClearance: number;
+  detachFromPopulation: () => void;
+  recycle: () => void;
 }
 
 interface SpeargunPickup {
   root: Group;
-  visual: Object3D;
   loadedSpear: Object3D | null;
   projectileSpawn: Object3D | null;
   statusLight: Object3D | null;
@@ -111,6 +133,17 @@ interface SpearProjectile {
   impactTimer: number;
 }
 
+interface SpearedCarcass {
+  root: Object3D;
+  spear: Object3D;
+  velocity: Vector3;
+  angularVelocity: Vector3;
+  floorClearance: number;
+  settled: boolean;
+  restTimer: number;
+  recycle: () => void;
+}
+
 function segmentPointT(point: Vector3, from: Vector3, to: Vector3): { t: number; distanceSq: number } {
   _segment.subVectors(to, from);
   const lengthSq = _segment.lengthSq();
@@ -125,12 +158,10 @@ function segmentPointT(point: Vector3, from: Vector3, to: Vector3): { t: number;
 /**
  * Physical right-hand one-shot underwater speargun.
  *
- * The GLB already provides GripPoint_RH, ProjectileSpawn, ReloadSocket,
- * LineAttachPoint and a distinct Spear_Loaded mesh. The gun is therefore aligned
- * from its authored grip helper, fires the authored spear as an actual projectile,
- * uses swept fish/terrain collision, and auto-reloads after a short prototype delay.
- * The explicit ReloadSocket is left intact so physical reload can replace the timer
- * later without rewriting firing or projectile logic.
+ * The GLB provides GripPoint_RH, ProjectileSpawn, ReloadSocket, LineAttachPoint and
+ * a distinct Spear_Loaded mesh. The gun aligns from the authored grip helper, fires
+ * the authored spear as a swept projectile, and turns a hit live fish into a temporary
+ * speared carcass which sinks and settles before returning to that species' pool.
  */
 export class SpeargunSystem {
   readonly ready: Promise<void>;
@@ -139,6 +170,7 @@ export class SpeargunSystem {
   private template: Object3D | null = null;
   private pickup: SpeargunPickup | null = null;
   private projectile: SpearProjectile | null = null;
+  private readonly carcasses: SpearedCarcass[] = [];
   private spearTipLocal = new Vector3(0, 0, -0.69);
   private previousSqueeze = 0;
   private previousTrigger = 0;
@@ -179,18 +211,17 @@ export class SpeargunSystem {
 
       if (!grip) console.warn('[speargun] missing GripPoint_RH; pickup will use scene origin');
       if (!spawn) console.warn('[speargun] missing ProjectileSpawn; firing will use gun origin');
-      if (!loaded) console.warn('[speargun] missing Spear_Loaded; gun can fire but projectile will have no authored spear visual');
-      if (!reload) console.warn('[speargun] missing ReloadSocket; future physical reload will need a fallback socket');
+      if (!loaded) console.warn('[speargun] missing Spear_Loaded; gun can fire but projectile has no authored visual');
+      if (!reload) console.warn('[speargun] missing ReloadSocket; future physical reload needs a fallback socket');
 
       if (loaded) {
         this.template.updateMatrixWorld(true);
-        const bounds = new Box3().setFromObject(loaded);
-        // The authored spear points along local -Z. Its farthest -Z point is the tip.
-        if (Number.isFinite(bounds.min.z)) {
+        const spearBounds = new Box3().setFromObject(loaded);
+        if (Number.isFinite(spearBounds.min.z)) {
           this.spearTipLocal.set(
-            (bounds.min.x + bounds.max.x) * 0.5,
-            (bounds.min.y + bounds.max.y) * 0.5,
-            bounds.min.z,
+            (spearBounds.min.x + spearBounds.max.x) * 0.5,
+            (spearBounds.min.y + spearBounds.max.y) * 0.5,
+            spearBounds.min.z,
           );
         }
       }
@@ -200,7 +231,8 @@ export class SpeargunSystem {
       bounds.getSize(size);
       console.info(
         `[speargun] loaded ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)} m; ` +
-          `helpers grip=${Boolean(grip)} projectile=${Boolean(spawn)} reload=${Boolean(reload)} spear=${Boolean(loaded)}`,
+          `display scale ${TOOL_SCALE.toFixed(2)}; helpers grip=${Boolean(grip)} projectile=${Boolean(spawn)} ` +
+          `reload=${Boolean(reload)} spear=${Boolean(loaded)}`,
       );
     } catch (error) {
       console.warn(`[speargun] failed to load ${ASSET_URL}`, error);
@@ -212,6 +244,7 @@ export class SpeargunSystem {
     dt = Math.min(Math.max(dt, 0), 0.05);
 
     this.updateProjectile(dt);
+    this.updateCarcasses(dt);
     this.updateReload(dt);
 
     const presenting = this.renderer.xr.isPresenting;
@@ -291,9 +324,9 @@ export class SpeargunSystem {
       .addScaledVector(WORLD_UP, -0.25);
     root.position.copy(_spawnPosition);
     root.quaternion.setFromUnitVectors(LOCAL_FORWARD, _spawnForward);
+    root.scale.setScalar(TOOL_SCALE);
     this.scene.add(root);
 
-    const visual = root.getObjectByName('speargun-visual') ?? root;
     const loadedSpear = root.getObjectByName('Spear_Loaded');
     const projectileSpawn = root.getObjectByName('ProjectileSpawn');
     const statusLight = root.getObjectByName('StatusLight');
@@ -302,7 +335,6 @@ export class SpeargunSystem {
 
     this.pickup = {
       root,
-      visual,
       loadedSpear,
       projectileSpawn,
       statusLight,
@@ -344,8 +376,8 @@ export class SpeargunSystem {
 
     palm.add(pickup.root);
     pickup.root.position.set(0, 0, 0);
-    pickup.root.quaternion.identity();
-    pickup.root.scale.set(1, 1, 1);
+    pickup.root.rotation.set(0, 0, HELD_ROLL);
+    pickup.root.scale.setScalar(TOOL_SCALE);
     pickup.held = true;
   }
 
@@ -423,10 +455,19 @@ export class SpeargunSystem {
 
     const fishHit = this.findNearestFishHit(_tipBefore, _tipAfter);
     if (fishHit) {
-      fishHit.commit();
+      // Back the projectile up to the swept impact time rather than leaving it one
+      // full frame past the fish, then push the spear a few centimetres into the body.
+      projectile.root.position.addScaledVector(_step, -(1 - fishHit.t));
+      _impactDirection.copy(projectile.velocity);
+      if (_impactDirection.lengthSq() > 1e-8) {
+        _impactDirection.normalize();
+        projectile.root.position.addScaledVector(_impactDirection, SPEAR_PENETRATION);
+      }
+      projectile.root.updateMatrixWorld(true);
+
+      this.beginSpearedCarcass(fishHit, projectile);
       this.fishHitCount += 1;
-      console.info(`[speargun] ${fishHit.species} fish hit (${this.fishHitCount} total)`);
-      this.impactProjectile();
+      console.info(`[speargun] ${fishHit.species} fish speared (${this.fishHitCount} total)`);
       return;
     }
 
@@ -452,6 +493,76 @@ export class SpeargunSystem {
     this.projectile.velocity.set(0, 0, 0);
   }
 
+  private beginSpearedCarcass(hit: FishHit, projectile: SpearProjectile): void {
+    hit.detachFromPopulation();
+
+    // Attach preserves the spear's world transform, so it remains visibly embedded at
+    // the exact angle and depth it hit instead of snapping to a canned socket.
+    hit.root.updateWorldMatrix(true, false);
+    hit.root.attach(projectile.root);
+
+    const velocity = projectile.velocity.clone().multiplyScalar(0.025);
+    if (velocity.length() > CARCASS_MAX_DRIFT_SPEED) velocity.setLength(CARCASS_MAX_DRIFT_SPEED);
+    velocity.y = Math.min(velocity.y, -0.08);
+
+    this.carcasses.push({
+      root: hit.root,
+      spear: projectile.root,
+      velocity,
+      angularVelocity: new Vector3(
+        (Math.random() - 0.5) * 0.24,
+        (Math.random() - 0.5) * 0.12,
+        (Math.random() - 0.5) * 0.32,
+      ),
+      floorClearance: hit.floorClearance,
+      settled: false,
+      restTimer: CARCASS_REST_SECONDS,
+      recycle: hit.recycle,
+    });
+
+    // The fired spear now belongs to the carcass. Clearing projectile lets the gun
+    // reload independently while the previous fish/spear pair continues sinking.
+    this.projectile = null;
+    if (this.pickup && !this.pickup.loaded) this.pickup.reloadTimer = AUTO_RELOAD_SECONDS;
+  }
+
+  private updateCarcasses(dt: number): void {
+    for (let index = this.carcasses.length - 1; index >= 0; index--) {
+      const carcass = this.carcasses[index]!;
+
+      if (!carcass.settled) {
+        carcass.velocity.y -= CARCASS_SINK_ACCELERATION * dt;
+        carcass.velocity.multiplyScalar(Math.exp(-CARCASS_WATER_DRAG * dt));
+        carcass.root.position.addScaledVector(carcass.velocity, dt);
+        carcass.root.rotateX(carcass.angularVelocity.x * dt);
+        carcass.root.rotateY(carcass.angularVelocity.y * dt);
+        carcass.root.rotateZ(carcass.angularVelocity.z * dt);
+
+        const seabed = this.density.seabedAt(carcass.root.position.x, carcass.root.position.z);
+        const floorY = seabed + carcass.floorClearance;
+        if (carcass.root.position.y <= floorY) {
+          carcass.root.position.y = floorY;
+          carcass.velocity.set(0, 0, 0);
+          carcass.angularVelocity.set(0, 0, 0);
+          carcass.settled = true;
+          carcass.restTimer = CARCASS_REST_SECONDS;
+        }
+        continue;
+      }
+
+      carcass.restTimer -= dt;
+      if (carcass.restTimer <= 0) this.recycleCarcass(index);
+    }
+  }
+
+  private recycleCarcass(index: number): void {
+    const carcass = this.carcasses[index];
+    if (!carcass) return;
+    carcass.spear.removeFromParent();
+    carcass.recycle();
+    this.carcasses.splice(index, 1);
+  }
+
   private finishProjectile(): void {
     if (!this.projectile) return;
     this.projectile.root.removeFromParent();
@@ -473,9 +584,9 @@ export class SpeargunSystem {
   private findNearestFishHit(from: Vector3, to: Vector3): FishHit | null {
     let best: FishHit | null = null;
 
-    // TypeScript private fields are normal runtime properties in this project. Keep
-    // this adapter isolated here so fish systems do not need weapon-specific code;
-    // if fauna later gains a shared damage interface, only this block gets replaced.
+    // Keep the weapon adapter isolated here. The fauna systems still own spawning,
+    // animation and pooling; a speared fish is merely withheld from its pool until its
+    // temporary carcass finishes sinking/resting.
     const prism = this.prismFish as unknown as PrismFishRuntime;
     for (const [schoolKey, school] of prism.activeSchools) {
       for (const fish of school) {
@@ -485,20 +596,32 @@ export class SpeargunSystem {
         if (hit.distanceSq > PRISM_HIT_RADIUS * PRISM_HIT_RADIUS) continue;
         if (best && hit.t >= best.t) continue;
 
+        let detached = false;
+        let recycled = false;
         best = {
           t: hit.t,
           species: 'prism',
-          commit: () => {
+          root: fish.root,
+          floorClearance: PRISM_FLOOR_CLEARANCE,
+          detachFromPopulation: () => {
+            if (detached) return;
             const currentSchool = prism.activeSchools.get(schoolKey);
             if (!currentSchool) return;
-            const index = currentSchool.indexOf(fish);
-            if (index >= 0) currentSchool.splice(index, 1);
+            const fishIndex = currentSchool.indexOf(fish);
+            if (fishIndex < 0) return;
+            currentSchool.splice(fishIndex, 1);
             if (currentSchool.length === 0) prism.activeSchools.delete(schoolKey);
             fish.currentAction?.stop();
             fish.currentAction = null;
             fish.cellKey = null;
+            fish.root.visible = true;
+            detached = true;
+          },
+          recycle: () => {
+            if (recycled) return;
             fish.root.visible = false;
             prism.pool.push(fish);
+            recycled = true;
           },
         };
       }
@@ -512,17 +635,27 @@ export class SpeargunSystem {
       if (hit.distanceSq > ALIEN_HIT_RADIUS * ALIEN_HIT_RADIUS) continue;
       if (best && hit.t >= best.t) continue;
 
+      let detached = false;
+      let recycled = false;
       best = {
         t: hit.t,
         species: 'alien',
-        commit: () => {
-          if (alien.activeFish.get(cellKey) !== fish) return;
+        root: fish.root,
+        floorClearance: ALIEN_FLOOR_CLEARANCE,
+        detachFromPopulation: () => {
+          if (detached || alien.activeFish.get(cellKey) !== fish) return;
           alien.activeFish.delete(cellKey);
           fish.currentAction?.stop();
           fish.currentAction = null;
           fish.cellKey = null;
+          fish.root.visible = true;
+          detached = true;
+        },
+        recycle: () => {
+          if (recycled) return;
           fish.root.visible = false;
           alien.pool.push(fish);
+          recycled = true;
         },
       };
     }
@@ -541,9 +674,14 @@ export class SpeargunSystem {
     this.projectile = null;
   }
 
+  private clearCarcasses(): void {
+    for (let index = this.carcasses.length - 1; index >= 0; index--) this.recycleCarcass(index);
+  }
+
   private endSession(): void {
     this.clearPickup();
     this.clearProjectile();
+    this.clearCarcasses();
     this.previousSqueeze = 0;
     this.previousTrigger = 0;
     this.spawnedForSession = false;

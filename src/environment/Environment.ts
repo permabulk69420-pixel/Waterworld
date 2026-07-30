@@ -38,6 +38,9 @@ export class Environment {
 
   private readonly fog: FogExp2;
   private readonly nightWater = new Color(0x000204);
+  // Keep underwater night haze almost black, but leave a tiny blue-green residue so
+  // silhouettes still read as submerged rather than disappearing into a flat void.
+  private readonly nightUnderwaterFog = new Color(0x00070b);
   // A deeper zenith than the old near-grey: the whole point of the horizon haze
   // in the sky shader is that it has something to fade *from*.
   private readonly dayZenith = new Color(0x3d78ab);
@@ -129,12 +132,16 @@ export class Environment {
 
     const depthT = saturate(this.depth / this.maxDepth);
     const depthColorT = Math.pow(depthT, 1.45);
+    const twilight = this.currentTwilight();
+    const underwaterNight = this.submergence * Math.pow(1 - twilight, 0.82);
 
-    // Underwater fog colour is depth/biome driven only. Day/night should change
-    // lighting, not tint the haze black or otherwise alter underwater visibility.
+    // Daytime keeps the biome/depth water colour, but night must darken the water
+    // volume itself. The old behaviour kept Safe Shallows cyan in the fog/background
+    // at midnight, which made darkness feel like a self-illuminated blue wall.
     this.tmpColor.copy(this.shallowWater);
     this.tmpColor.lerp(this.sunlitWater, (1 - depthT) * 0.24);
     this.tmpColor.lerp(this.deepWater, depthColorT);
+    this.tmpColor.lerp(this.nightUnderwaterFog, underwaterNight * 0.96);
     this.tmpColor.lerp(this.tmpAir, 1 - this.submergence);
     this.fog.color.copy(this.tmpColor);
     if (this.scene.background instanceof Color) this.scene.background.copy(this.tmpColor);
@@ -142,11 +149,12 @@ export class Environment {
     const waterDensity =
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
-    // Bright shallow water should read clearer than the same water at night/depth.
-    // Keep the change modest and fade it quickly with depth so the world still has
-    // strong blue distance haze instead of looking like air with a cyan background.
+    // Daytime shallow water stays a little clearer. At full night also relax the
+    // density slightly: distance should disappear primarily because there is no light,
+    // not because a dense coloured fog curtain blocks the view.
     const shallowDayClarity = this.submergence * this.daylight * Math.pow(1 - depthT, 1.6);
-    const adjustedWaterDensity = waterDensity * (1 - 0.2 * shallowDayClarity);
+    const nightDensityEase = 1 - 0.16 * underwaterNight;
+    const adjustedWaterDensity = waterDensity * (1 - 0.2 * shallowDayClarity) * nightDensityEase;
     this.fog.density =
       AIR_FOG_DENSITY + (adjustedWaterDensity - AIR_FOG_DENSITY) * this.submergence;
 
@@ -156,11 +164,11 @@ export class Environment {
       this.shallowWater,
       this.deepWater,
       this.daylight,
-      this.currentTwilight(),
+      twilight,
     );
     this.lighting.follow(cameraPosition);
 
-    this.sky.setExposure((0.08 + 0.92 * this.currentTwilight()) * (1 - 0.5 * this.submergence));
+    this.sky.setExposure((0.08 + 0.92 * twilight) * (1 - 0.5 * this.submergence));
     this.sky.setFogBlend(this.tmpColor, this.submergence);
     this.sky.setTime(elapsed);
     this.sky.followCamera(cameraPosition);

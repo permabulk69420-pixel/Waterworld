@@ -2,6 +2,7 @@ import {
   AnimationMixer,
   Box3,
   Group,
+  LoopOnce,
   LoopRepeat,
   MathUtils,
   Mesh,
@@ -10,6 +11,7 @@ import {
   Vector3,
   type AnimationAction,
   type AnimationClip,
+  type KeyframeTrack,
   type Scene,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -41,9 +43,11 @@ const POPULATION_REFRESH_SECONDS = 0.65;
 
 const GROUND_CLEARANCE = 0.035;
 const WANDER_RADIUS = 2.8;
-const CRAWL_SPEED_MIN = 0.16;
-const CRAWL_SPEED_MAX = 0.28;
-const SCURRY_SPEED = 1.15;
+// Match the locomotion speeds authored into the GLB metadata so the planted
+// tentacles and world translation stay visually locked together.
+const CRAWL_SPEED_MIN = 0.30;
+const CRAWL_SPEED_MAX = 0.38;
+const SCURRY_SPEED = 0.88;
 const THREAT_DISTANCE = 2.2;
 const FLEE_DISTANCE = 1.35;
 const CALM_DISTANCE = 3.2;
@@ -65,11 +69,23 @@ function normalizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function withoutRootMotion(clip: AnimationClip): AnimationClip {
+  const normalized = normalizeName(clip.name);
+  if (normalized !== 'crawl' && normalized !== 'scurry') return clip;
+
+  const copy = clip.clone();
+  copy.tracks = copy.tracks.filter((track: KeyframeTrack) => {
+    const target = track.name.toLowerCase();
+    if (!target.includes('creatureroot')) return true;
+    return !target.endsWith('.position') && !target.endsWith('.quaternion');
+  });
+  return copy;
+}
+
 type CrabState = 'crawl' | 'idle' | 'feed' | 'threat' | 'scurry';
 
 interface CrabInstance {
   root: Group;
-  model: Object3D;
   mixer: AnimationMixer;
   actions: Map<string, AnimationAction>;
   currentAction: AnimationAction | null;
@@ -113,7 +129,7 @@ export class OctopusCrabSystem {
     try {
       const gltf = await new GLTFLoader().loadAsync(ASSET_URL);
       this.template = gltf.scene;
-      this.clips = gltf.animations;
+      this.clips = gltf.animations.map(withoutRootMotion);
 
       this.template.traverse((object) => {
         if (!(object instanceof Mesh)) return;
@@ -252,7 +268,6 @@ export class OctopusCrabSystem {
 
     const crab: CrabInstance = {
       root,
-      model,
       mixer,
       actions,
       currentAction: null,
@@ -372,30 +387,36 @@ export class OctopusCrabSystem {
 
     if (state === 'scurry') {
       crab.stateTimer = 1.25;
-      this.playBest(crab, ['Scurry', 'ScurryBurst', 'Run', 'Crawl'], 0.06, 1.18);
+      this.playBest(crab, ['Scurry', 'Crawl'], 0.06, 1, true);
       return;
     }
     if (state === 'threat') {
       crab.stateTimer = MathUtils.lerp(0.45, 0.8, Math.random());
-      this.playBest(crab, ['Threat', 'Defend', 'Idle'], 0.08, 1.0);
+      this.playBest(crab, ['Threat', 'Idle'], 0.08, 1, false);
       return;
     }
     if (state === 'feed') {
       crab.stateTimer = MathUtils.lerp(1.4, 3.0, Math.random());
-      this.playBest(crab, ['Feed', 'Feeding', 'Idle'], 0.16, MathUtils.lerp(0.88, 1.05, Math.random()));
+      this.playBest(crab, ['Feed', 'Idle'], 0.16, MathUtils.lerp(0.88, 1.05, Math.random()), true);
       return;
     }
     if (state === 'idle') {
       crab.stateTimer = MathUtils.lerp(1.0, 2.8, Math.random());
-      this.playBest(crab, ['Idle', 'Rest', 'Crawl'], 0.16, MathUtils.lerp(0.82, 1.0, Math.random()));
+      this.playBest(crab, ['Idle', 'Crawl'], 0.16, MathUtils.lerp(0.82, 1.0, Math.random()), true);
       return;
     }
 
     crab.stateTimer = MathUtils.lerp(2.5, 5.5, Math.random());
-    this.playBest(crab, ['Crawl', 'Scuttle', 'Walk', 'Idle'], 0.12, MathUtils.lerp(0.9, 1.08, Math.random()));
+    this.playBest(crab, ['Crawl', 'Idle'], 0.12, MathUtils.lerp(0.9, 1.08, Math.random()), true);
   }
 
-  private playBest(crab: CrabInstance, names: readonly string[], fade: number, timeScale: number): void {
+  private playBest(
+    crab: CrabInstance,
+    names: readonly string[],
+    fade: number,
+    timeScale: number,
+    loop: boolean,
+  ): void {
     let next: AnimationAction | undefined;
     for (const name of names) {
       next = crab.actions.get(normalizeName(name));
@@ -411,7 +432,8 @@ export class OctopusCrabSystem {
 
     next.enabled = true;
     next.reset();
-    next.setLoop(LoopRepeat, Infinity);
+    next.setLoop(loop ? LoopRepeat : LoopOnce, loop ? Infinity : 1);
+    next.clampWhenFinished = !loop;
     next.timeScale = timeScale;
     next.setEffectiveWeight(1);
     next.play();

@@ -21,7 +21,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V20-DARK-NIGHT-WATER';
+const BUILD_TAG = 'BUILD-MODE-V21-60M-COLOSSUS';
 
 /**
  * Bootstrap.

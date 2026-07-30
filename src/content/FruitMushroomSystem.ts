@@ -12,7 +12,7 @@ import type { BiomeConfig } from '../config/biomes/types.ts';
 import type { VRHands, Handedness } from '../player/VRHands.ts';
 import type { ChunkContentContext, ContentPopulator } from './ContentRegistry.ts';
 
-const ASSET_URL = './assets/biomes/safe-shallows/alien_mushroom_vines_fruit_10m_v1.glb';
+const ASSET_URL = './assets/biomes/safe-shallows/alien_mushroom_vines_fruit_10m_v3_PBRv1.glb';
 const UP = new Vector3(0, 1, 0);
 
 // Roughly half the frequency of the normal giant mushroom system (0.45).

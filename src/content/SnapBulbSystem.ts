@@ -18,15 +18,16 @@ const PEARL_NODE_NAME = 'SnapPearl';
 const CLOSE_CLIP_NAME = 'Snap_Close';
 const OPEN_CLIP_NAME = 'Snap_Open';
 
-// These mirror the metadata baked into snap_bulb_FINAL_verified.glb, with a
-// slightly more forgiving physical grab radius for tracked-controller VR.
-const BASE_TRIGGER_RADIUS = 0.28;
-const PEARL_GRAB_RADIUS = 0.12;
+// Use generous tracked-controller distances for Quest VR. The old 12 cm pickup
+// window sat inside a much larger snap-trigger radius, so a normal reach could
+// close the trap before the controller ever entered the pickup zone.
+const BASE_TRIGGER_RADIUS = 0.32;
+const PEARL_GRAB_RADIUS = 0.18;
 const PEARL_PULL_CLEAR_RADIUS = 0.24;
 const REOPEN_RADIUS_MULTIPLIER = 1.35;
-const WARNING_SECONDS = 0.16;
+const WARNING_SECONDS = 0.28;
 const REOPEN_DELAY_SECONDS = 1.35;
-const GRIP_THRESHOLD = 0.55;
+const GRIP_THRESHOLD = 0.45;
 
 type SnapState = 'open' | 'closing' | 'closed' | 'opening';
 
@@ -51,8 +52,8 @@ interface BulbRuntime {
 
 const _leftTip = new Vector3();
 const _rightTip = new Vector3();
-const _leftPalm = new Vector3();
-const _rightPalm = new Vector3();
+const _leftGrip = new Vector3();
+const _rightGrip = new Vector3();
 const _pearlPosition = new Vector3();
 const _worldScale = new Vector3();
 
@@ -61,8 +62,8 @@ const _worldScale = new Vector3();
  *
  * BuildSystem owns placement. In Story mode the rooted bulb is a physical VR
  * trap/resource: reach toward the pearl and the lid threatens to snap shut;
- * squeeze close enough to actually attach the pearl to the hand, pull it clear,
- * then release to bank it. The plant itself stays rooted in the authored world.
+ * squeeze near the pearl to attach it to the tracked hand, pull it clear, then
+ * release to bank it. The plant itself stays rooted in the authored world.
  */
 export class SnapBulbSystem {
   readonly ready: Promise<void>;
@@ -89,6 +90,7 @@ export class SnapBulbSystem {
       this.clips = gltf.animations;
       this.loaded = true;
       this.syncInstances(true);
+      console.info(`[snap-bulb] loaded clips [${this.clips.map((clip) => clip.name).join(', ')}]`);
     } catch (error) {
       console.warn(`[snap-bulb] failed to load animation clips from ${ASSET_URL}`, error);
     }
@@ -166,6 +168,10 @@ export class SnapBulbSystem {
       heldBy: null,
       pulledClear: false,
     });
+
+    console.info(
+      `[snap-bulb] attached ${root.name}; pearl=${Boolean(pearl)} close=${Boolean(closeAction)} open=${Boolean(openAction)}`,
+    );
   }
 
   private updateBulb(bulb: BulbRuntime, dt: number): void {
@@ -186,31 +192,51 @@ export class SnapBulbSystem {
       if (_pearlPosition.distanceTo(bulb.pearlHomeWorld) >= pullClearRadius) bulb.pulledClear = true;
 
       if (!this.gripHeld(bulb.heldBy)) this.finishPearlGrab(bulb);
-      this.advanceSnapState(bulb, Number.POSITIVE_INFINITY, reopenRadius, dt);
+      this.advanceSnapState(bulb, Number.POSITIVE_INFINITY, triggerRadius, reopenRadius, dt);
       return;
     }
 
+    // Never rely on a world-space pearl coordinate captured when the layout loaded.
+    // Authored objects can move in Build mode and then be restored from local layout;
+    // the live node transform is the only reliable interaction target.
+    pearl.updateWorldMatrix(true, false);
+    pearl.getWorldPosition(_pearlPosition);
+    bulb.pearlHomeWorld.copy(_pearlPosition);
+
     const hasLeftTip = this.hands.getIndexTipWorldPosition('left', _leftTip);
     const hasRightTip = this.hands.getIndexTipWorldPosition('right', _rightTip);
-    const leftTipDistance = hasLeftTip ? _leftTip.distanceTo(bulb.pearlHomeWorld) : Number.POSITIVE_INFINITY;
-    const rightTipDistance = hasRightTip ? _rightTip.distanceTo(bulb.pearlHomeWorld) : Number.POSITIVE_INFINITY;
-    const nearestTip = Math.min(leftTipDistance, rightTipDistance);
+    const leftTipDistance = hasLeftTip ? _leftTip.distanceTo(_pearlPosition) : Number.POSITIVE_INFINITY;
+    const rightTipDistance = hasRightTip ? _rightTip.distanceTo(_pearlPosition) : Number.POSITIVE_INFINITY;
 
-    const leftGrabDistance = Math.min(leftTipDistance, this.palmDistance('left', bulb.pearlHomeWorld, _leftPalm));
-    const rightGrabDistance = Math.min(rightTipDistance, this.palmDistance('right', bulb.pearlHomeWorld, _rightPalm));
+    const leftGripDistance = this.controllerGripDistance('left', _pearlPosition, _leftGrip);
+    const rightGripDistance = this.controllerGripDistance('right', _pearlPosition, _rightGrip);
+    const leftDistance = Math.min(leftTipDistance, leftGripDistance);
+    const rightDistance = Math.min(rightTipDistance, rightGripDistance);
+    const nearest = Math.min(leftDistance, rightDistance);
 
-    if (!bulb.collected && bulb.state !== 'closed') {
-      if (leftGrabDistance <= grabRadius && this.gripHeld('left')) this.beginPearlGrab(bulb, 'left');
-      else if (rightGrabDistance <= grabRadius && this.gripHeld('right')) this.beginPearlGrab(bulb, 'right');
+    // A deliberate squeeze near the visible pearl wins over the trap state. This
+    // prevents the lid from turning a valid physical grab into a silent no-op.
+    if (!bulb.collected) {
+      if (leftDistance <= grabRadius && this.gripHeld('left')) {
+        this.beginPearlGrab(bulb, 'left');
+      } else if (rightDistance <= grabRadius && this.gripHeld('right')) {
+        this.beginPearlGrab(bulb, 'right');
+      }
     }
 
     if (bulb.heldBy) return;
-    this.advanceSnapState(bulb, nearestTip, reopenRadius, dt);
+    this.advanceSnapState(bulb, nearest, triggerRadius, reopenRadius, dt);
   }
 
-  private advanceSnapState(bulb: BulbRuntime, nearest: number, reopenRadius: number, dt: number): void {
+  private advanceSnapState(
+    bulb: BulbRuntime,
+    nearest: number,
+    triggerRadius: number,
+    reopenRadius: number,
+    dt: number,
+  ): void {
     if (bulb.state === 'open') {
-      if (!bulb.collected && nearest <= BASE_TRIGGER_RADIUS * this.rootScale(bulb.root)) {
+      if (!bulb.collected && nearest <= triggerRadius) {
         bulb.threatTime += dt;
         if (bulb.threatTime >= WARNING_SECONDS) this.close(bulb);
       } else {
@@ -246,14 +272,17 @@ export class SnapBulbSystem {
     const grip = this.hands.getObjectGrip(handedness);
     if (!grip) return;
 
+    // Freeze the exact pickup origin before re-parenting, so pull distance is
+    // measured from where the pearl genuinely was when the player grabbed it.
     bulb.pearl.updateWorldMatrix(true, false);
+    bulb.pearl.getWorldPosition(bulb.pearlHomeWorld);
+
     grip.attach(bulb.pearl);
     bulb.pearl.updateMatrixWorld(true);
     bulb.heldBy = handedness;
     bulb.pulledClear = false;
 
-    // A successful grab immediately commits the trap: the hand now physically owns
-    // the pearl while the baked lid animation snaps shut around/behind it.
+    console.info(`[snap-bulb] ${handedness} hand grabbed pearl from ${bulb.root.name}`);
     this.close(bulb);
   }
 
@@ -268,6 +297,7 @@ export class SnapBulbSystem {
       console.info(`[snap-bulb] pearl collected (${this.collectedPearls})`);
     } else {
       this.returnPearlHome(bulb);
+      console.info('[snap-bulb] pearl released before it cleared the trap; returned home');
     }
 
     bulb.heldBy = null;
@@ -285,6 +315,7 @@ export class SnapBulbSystem {
     pearl.scale.copy(bulb.pearlHomeScale);
     pearl.visible = true;
     pearl.updateMatrixWorld(true);
+    pearl.getWorldPosition(bulb.pearlHomeWorld);
   }
 
   private close(bulb: BulbRuntime): void {
@@ -293,6 +324,7 @@ export class SnapBulbSystem {
     if (bulb.closeAction) {
       bulb.closeAction.reset().play();
       bulb.state = 'closing';
+      console.info(`[snap-bulb] closing ${bulb.root.name}`);
     } else {
       bulb.state = 'closed';
     }
@@ -313,17 +345,12 @@ export class SnapBulbSystem {
     bulb.safeTime = 0;
   }
 
-  private palmDistance(handedness: Handedness, target: Vector3, scratch: Vector3): number {
-    const grip = this.hands.getObjectGrip(handedness);
+  private controllerGripDistance(handedness: Handedness, target: Vector3, scratch: Vector3): number {
+    const grip = this.hands.getControllerGrip(handedness);
     if (!grip) return Number.POSITIVE_INFINITY;
     grip.updateWorldMatrix(true, false);
     grip.getWorldPosition(scratch);
     return scratch.distanceTo(target);
-  }
-
-  private rootScale(root: Object3D): number {
-    root.getWorldScale(_worldScale);
-    return Math.max(0.02, Math.abs(_worldScale.x), Math.abs(_worldScale.y), Math.abs(_worldScale.z));
   }
 
   private gripHeld(handedness: Handedness): boolean {

@@ -13,7 +13,8 @@
     "scale": 1,
     "spawnDistance": 24,
     "spawnY": 0,
-    "collision": true
+    "collision": true,
+    "selectable": false
   },
   {
     "id": "snap-bulb",

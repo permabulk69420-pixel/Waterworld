@@ -21,7 +21,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V22-COLOSSUS-UPRIGHT';
+const BUILD_TAG = 'BUILD-MODE-V23-PBR-SAND-V10';
 
 /**
  * Bootstrap.

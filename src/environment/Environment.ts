@@ -130,10 +130,9 @@ export class Environment {
     const waterDensity =
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
-    // A slightly stronger *dark* extinction at night makes distant geometry fall
-    // away rather than remaining as a bright grey silhouette.
-    const nightDensity = waterDensity * (1 + 0.05 * nightFactor);
-    this.fog.density = 0.0016 + (nightDensity - 0.0016) * this.submergence;
+    // Fog density is depth-driven only; day/night changes colour and lighting,
+    // not visibility distance.
+    this.fog.density = 0.0016 + (waterDensity - 0.0016) * this.submergence;
 
     this.lighting.update(
       this.submergence,

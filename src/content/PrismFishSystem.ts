@@ -26,7 +26,9 @@ const ASSET_URL = './assets/fauna/prism_disc_glow_fish_animated.glb';
 // firmly in the little tropical-fish range even if a later export changes scale.
 const TARGET_MAX_DIMENSION = 0.25;
 const MAX_RANDOM_SCALE = 1.06;
-const FISH_COUNT = 4;
+const FISH_COUNT = 12;
+const SCHOOL_SIZE = 3;
+const SCHOOL_SPREAD = 1.25;
 
 const SPAWN_MIN_RADIUS = 5;
 const SPAWN_MAX_RADIUS = 14;
@@ -71,10 +73,11 @@ interface FishInstance {
 /**
  * Small animated ambient fish for the Safe Shallows.
  *
- * This deliberately uses only a handful of independently animated fish for the
- * first pass: the GLB has several separate meshes, so hundreds of clones would
- * be a poor Quest 3 trade. They wander locally, avoid terrain, scurry away from
- * the player and become strongly bioluminescent as daylight disappears.
+ * A modest pool of independently animated fish is recycled around the player.
+ * They appear in loose groups of roughly three, but every fish has independent
+ * speed, animation timing, wandering and flee response so the groups never move
+ * like a synchronized school. The GLB has several meshes, so the count stays
+ * intentionally conservative for standalone Quest 3.
  */
 export class PrismFishSystem {
   readonly ready: Promise<void>;
@@ -117,7 +120,7 @@ export class PrismFishSystem {
 
       console.info(
         `[fauna] prism fish loaded: raw ${_size.x.toFixed(2)} x ${_size.y.toFixed(2)} x ${_size.z.toFixed(2)} m; ` +
-          `display max ${(TARGET_MAX_DIMENSION * MAX_RANDOM_SCALE).toFixed(2)} m`,
+          `display max ${(TARGET_MAX_DIMENSION * MAX_RANDOM_SCALE).toFixed(2)} m; count ${FISH_COUNT}`,
       );
     } catch (error) {
       this.loadFailed = true;
@@ -280,11 +283,25 @@ export class PrismFishSystem {
   }
 
   private placeNearPlayer(fish: FishInstance, index: number): void {
-    const baseAngle = (index / Math.max(1, this.fish.length)) * Math.PI * 2 + Math.random() * 0.7;
+    const schoolCount = Math.ceil(this.fish.length / SCHOOL_SIZE);
+    const schoolIndex = Math.floor(index / SCHOOL_SIZE);
+    const memberIndex = index % SCHOOL_SIZE;
+
+    // Give each little group a stable sector around the player, then scatter the
+    // individual members inside that sector. This reads as loose schooling without
+    // any expensive flocking simulation or synchronized steering.
+    const schoolAngle = (schoolIndex / Math.max(1, schoolCount)) * Math.PI * 2 + 0.38;
+    const radiusT = schoolCount <= 1 ? 0.5 : schoolIndex / (schoolCount - 1);
+    const schoolRadius = MathUtils.lerp(SPAWN_MIN_RADIUS + 1.5, SPAWN_MAX_RADIUS - 1.0, radiusT);
+    const memberArc = (memberIndex - (SCHOOL_SIZE - 1) * 0.5) * 0.1;
 
     for (let attempt = 0; attempt < 14; attempt++) {
-      const angle = baseAngle + (Math.random() - 0.5) * 1.4;
-      const radius = MathUtils.lerp(SPAWN_MIN_RADIUS, SPAWN_MAX_RADIUS, Math.random());
+      const angle = schoolAngle + memberArc + (Math.random() - 0.5) * 0.18;
+      const radius = MathUtils.clamp(
+        schoolRadius + (Math.random() - 0.5) * SCHOOL_SPREAD * 2,
+        SPAWN_MIN_RADIUS,
+        SPAWN_MAX_RADIUS,
+      );
       const x = _player.x + Math.cos(angle) * radius;
       const z = _player.z + Math.sin(angle) * radius;
       if (this.biomes.biomeAt(x, z).id !== 'SAFE_SHALLOWS') continue;
@@ -299,7 +316,13 @@ export class PrismFishSystem {
 
       fish.root.position.set(x, y, z);
       fish.home.copy(fish.root.position);
-      fish.direction.set(Math.cos(angle + Math.PI * 0.5), (Math.random() - 0.5) * 0.12, Math.sin(angle + Math.PI * 0.5)).normalize();
+      fish.direction
+        .set(
+          Math.cos(angle + Math.PI * 0.5),
+          (Math.random() - 0.5) * 0.12,
+          Math.sin(angle + Math.PI * 0.5),
+        )
+        .normalize();
       fish.active = true;
       fish.root.visible = true;
       fish.state = 'cruise';

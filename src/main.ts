@@ -6,11 +6,12 @@ import { BioluminescentPlankton } from './environment/BioluminescentPlankton.ts'
 import { HandThrusters } from './player/HandThrusters.ts';
 import { Headlamp } from './player/Headlamp.ts';
 import { RearLedgeClimb } from './player/RearLedgeClimb.ts';
+import { ThrusterLightingFix } from './player/ThrusterLightingFix.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V6-BIOLUMINESCENT-PLANKTON';
+const BUILD_TAG = 'BUILD-MODE-V7-DARK-NIGHT-LIT-THRUSTERS';
 
 /**
  * Bootstrap.
@@ -95,6 +96,7 @@ async function bootstrap(): Promise<void> {
   await authoredWorld.ready;
 
   let thrusters: HandThrusters | null = null;
+  let thrusterLighting: ThrusterLightingFix | null = null;
   let rearClimb: RearLedgeClimb | null = null;
   let headlamp: Headlamp | null = null;
   if (mode === 'story') {
@@ -112,6 +114,10 @@ async function bootstrap(): Promise<void> {
     );
 
     headlamp = new Headlamp(game.scene, game.renderer, game.rig, hands);
+    // Give the current test lamp roughly 30% more practical reach without changing
+    // beam width or battery behaviour.
+    headlamp.light.distance *= 1.3;
+    headlamp.light.intensity *= 1.3;
 
     thrusters = new HandThrusters(
       game.renderer,
@@ -120,6 +126,7 @@ async function bootstrap(): Promise<void> {
       game.scene,
       game.rig,
     );
+    thrusterLighting = new ThrusterLightingFix(game.scene);
     settings.setStatus(`${BUILD_TAG} · loading hand motors`);
     await thrusters.ready;
   }
@@ -132,6 +139,9 @@ async function bootstrap(): Promise<void> {
     hands.update(dt);
     headlamp?.update(dt);
     thrusters?.update(dt);
+    // Spawned motors used to be unlit MeshBasicMaterial. Convert each new pickup
+    // once so it now darkens naturally with the rest of the underwater scene.
+    thrusterLighting?.update();
     plankton.update(dt, elapsed);
     // Run after the motors so an anchored hand can cancel propulsion for the
     // current frame while the player physically pulls against the rear ledge.

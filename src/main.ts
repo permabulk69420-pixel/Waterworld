@@ -3,6 +3,7 @@ import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
+import { SnapBulbSystem } from './content/SnapBulbSystem.ts';
 import { BioluminescentPlankton } from './environment/BioluminescentPlankton.ts';
 import { HandThrusters } from './player/HandThrusters.ts';
 import { Headlamp } from './player/Headlamp.ts';
@@ -12,7 +13,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V8-PRISM-FAUNA';
+const BUILD_TAG = 'BUILD-MODE-V9-SNAP-BULBS';
 
 /**
  * Bootstrap.
@@ -106,6 +107,10 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · loading authored world`);
   await authoredWorld.ready;
 
+  const snapBulbs = new SnapBulbSystem(authoredWorld.root, game.renderer, hands, mode);
+  settings.setStatus(`${BUILD_TAG} · loading snap bulbs`);
+  await snapBulbs.ready;
+
   let thrusters: HandThrusters | null = null;
   let thrusterLighting: ThrusterLightingFix | null = null;
   let rearClimb: RearLedgeClimb | null = null;
@@ -159,6 +164,7 @@ async function bootstrap(): Promise<void> {
     // current frame while the player physically pulls against the rear ledge.
     rearClimb?.update();
     authoredWorld.update();
+    snapBulbs.update(dt);
   });
 
   (window as unknown as {
@@ -185,6 +191,7 @@ async function bootstrap(): Promise<void> {
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
   }).plankton = plankton;
+  (window as unknown as { snapBulbs: SnapBulbSystem }).snapBulbs = snapBulbs;
 
   await game.start((progress, label) => {
     bootFill.style.width = `${Math.round(progress * 100)}%`;

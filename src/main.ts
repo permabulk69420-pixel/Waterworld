@@ -1,3 +1,4 @@
+import { installBuildSelectionAssist } from './build/BuildSelectionAssist.ts';
 import { BuildSystem } from './build/BuildSystem.ts';
 import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
@@ -13,7 +14,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V9-SNAP-BULBS';
+const BUILD_TAG = 'BUILD-MODE-V10-PRECISE-POINTER';
 
 /**
  * Bootstrap.
@@ -106,6 +107,7 @@ async function bootstrap(): Promise<void> {
   const authoredWorld = new BuildSystem(game.scene, game.renderer, game.rig, hands, mode);
   settings.setStatus(`${BUILD_TAG} · loading authored world`);
   await authoredWorld.ready;
+  installBuildSelectionAssist(authoredWorld);
 
   const snapBulbs = new SnapBulbSystem(authoredWorld.root, game.renderer, hands, mode);
   settings.setStatus(`${BUILD_TAG} · loading snap bulbs`);
@@ -199,7 +201,7 @@ async function bootstrap(): Promise<void> {
   });
 
   if (mode === 'build') {
-    hint.textContent = 'BUILD · left trigger menu · right trigger select/click · grip moves selection · A/X up · B/Y down';
+    hint.textContent = 'BUILD · right-hand laser aims · right trigger selects · right grip grabs pointed prop · left trigger menu · A/X up · B/Y down';
   } else {
     hint.textContent = 'STORY · tap either side of your head with a hand to toggle lamp · rear ledge: hold grip and pull';
   }

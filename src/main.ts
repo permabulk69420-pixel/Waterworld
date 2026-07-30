@@ -4,6 +4,7 @@ import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
+import { RiverRockSystem } from './content/RiverRockSystem.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
 import { SnapBulbSystem } from './content/SnapBulbSystem.ts';
 import { BioluminescentPlankton } from './environment/BioluminescentPlankton.ts';
@@ -15,7 +16,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V12-PHYSICAL-SNAP-BULBS';
+const BUILD_TAG = 'BUILD-MODE-V13-PBR-RIVER-ROCKS';
 
 /**
  * Bootstrap.
@@ -74,6 +75,11 @@ async function bootstrap(): Promise<void> {
       ...(number('workers') !== undefined ? { workerCount: number('workers')! } : {}),
     },
   });
+
+  const riverRocks = new RiverRockSystem(game.scene);
+  game.content.register(riverRocks);
+  settings.setStatus(`${BUILD_TAG} · loading PBR river rocks`);
+  await riverRocks.ready;
 
   const seaGrass = new SeaGrassSystem(game.scene, {
     densityMultiplier: grassDensityPercent / 100,

@@ -5,7 +5,11 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # The visuals branch publishes too, so the water/sky work can be tried on
+    # the headset before it is merged. Pages only hosts one site, so whichever
+    # of these pushed last is what the Quest will load - drop the branch from
+    # this list once it has merged.
+    branches: [main, claude/quest3-water-sky-visuals-crwo0n]
   workflow_dispatch:
 
 permissions:

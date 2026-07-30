@@ -15,12 +15,13 @@ import { BioluminescentPlankton } from './environment/BioluminescentPlankton.ts'
 import { HandThrusters } from './player/HandThrusters.ts';
 import { Headlamp } from './player/Headlamp.ts';
 import { RearLedgeClimb } from './player/RearLedgeClimb.ts';
+import { SpeargunSystem } from './player/SpeargunSystem.ts';
 import { ThrusterLightingFix } from './player/ThrusterLightingFix.ts';
 import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V17-FRUIT-MUSHROOMS';
+const BUILD_TAG = 'BUILD-MODE-V18-SPEARGUN';
 
 /**
  * Bootstrap.
@@ -172,6 +173,7 @@ async function bootstrap(): Promise<void> {
   let thrusterLighting: ThrusterLightingFix | null = null;
   let rearClimb: RearLedgeClimb | null = null;
   let headlamp: Headlamp | null = null;
+  let speargun: SpeargunSystem | null = null;
   if (mode === 'story') {
     // The ship GLB carries simple COLLIDER_* geometry for its accessible rear
     // section. Install it only in Story mode so Build-mode object movement never
@@ -202,9 +204,21 @@ async function bootstrap(): Promise<void> {
     thrusterLighting = new ThrusterLightingFix(game.scene);
     settings.setStatus(`${BUILD_TAG} · loading hand motors`);
     await thrusters.ready;
+
+    speargun = new SpeargunSystem(
+      game.renderer,
+      hands,
+      game.scene,
+      game.rig,
+      game.density,
+      prismFish,
+      alienFish,
+    );
+    settings.setStatus(`${BUILD_TAG} · loading one-hand speargun`);
+    await speargun.ready;
   }
 
-  // Story reserves triggers for the motors. Build reserves them for the editor.
+  // Story reserves triggers for held tools. Build reserves them for the editor.
   // Vertical travel in Build stays on A/X and B/Y, so there is no input fight.
   game.xrInput.setTriggerVerticalEnabled(false);
 
@@ -217,6 +231,7 @@ async function bootstrap(): Promise<void> {
     thrusterLighting?.update();
     prismFish.update(dt, elapsed);
     alienFish.update(dt, elapsed);
+    speargun?.update(dt);
     octopusCrabs.update(dt);
     plankton.update(dt, elapsed);
     colossusMushroom.update(elapsed);
@@ -233,6 +248,7 @@ async function bootstrap(): Promise<void> {
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
     fruitMushrooms: FruitMushroomSystem;
+    speargun: SpeargunSystem | null;
   }).game = game;
   (window as unknown as {
     game: Game;
@@ -240,6 +256,7 @@ async function bootstrap(): Promise<void> {
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
     fruitMushrooms: FruitMushroomSystem;
+    speargun: SpeargunSystem | null;
   }).build = authoredWorld;
   (window as unknown as {
     game: Game;
@@ -247,6 +264,7 @@ async function bootstrap(): Promise<void> {
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
     fruitMushrooms: FruitMushroomSystem;
+    speargun: SpeargunSystem | null;
   }).headlamp = headlamp;
   (window as unknown as {
     game: Game;
@@ -254,9 +272,11 @@ async function bootstrap(): Promise<void> {
     headlamp: Headlamp | null;
     plankton: BioluminescentPlankton;
     fruitMushrooms: FruitMushroomSystem;
+    speargun: SpeargunSystem | null;
   }).plankton = plankton;
   (window as unknown as { snapBulbs: SnapBulbSystem }).snapBulbs = snapBulbs;
   (window as unknown as { fruitMushrooms: FruitMushroomSystem }).fruitMushrooms = fruitMushrooms;
+  (window as unknown as { speargun: SpeargunSystem | null }).speargun = speargun;
 
   await game.start((progress, label) => {
     bootFill.style.width = `${Math.round(progress * 100)}%`;
@@ -266,7 +286,7 @@ async function bootstrap(): Promise<void> {
   if (mode === 'build') {
     hint.textContent = 'BUILD · right-hand laser aims · right trigger selects · right grip grabs pointed prop · left trigger menu · A/X up · B/Y down';
   } else {
-    hint.textContent = 'STORY · tap either side of your head with a hand to toggle lamp · grip hanging mushroom fruit to harvest · rear ledge: hold grip and pull';
+    hint.textContent = 'STORY · right grip picks up speargun · right trigger fires · grip hanging mushroom fruit to harvest · tap head to toggle lamp';
   }
 
   boot.classList.add('hidden');

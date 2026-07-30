@@ -2,7 +2,7 @@ import {
   CanvasTexture,
   DynamicDrawUsage,
   InstancedMesh,
-  MathUtils,
+  Matrix4,
   Mesh,
   MeshStandardMaterial,
   Object3D,
@@ -40,7 +40,7 @@ const START_AREA_CLEAR_RADIUS_SQ = START_AREA_CLEAR_RADIUS * START_AREA_CLEAR_RA
 
 interface RockPlacement {
   position: Vector3;
-  matrix: Object3D['matrix'];
+  matrix: Matrix4;
 }
 
 /**
@@ -296,12 +296,10 @@ async function buildOrmTexture(): Promise<CanvasTexture> {
   if (!scratchCtx) throw new Error('Could not create ORM scratch canvas');
 
   copyGrayscaleIntoChannel(aoImage, scratchCtx, output.data, width, height, 0);
+  aoImage.src = '';
 
-  const roughnessImage = await loadImage(ROUGHNESS_URL);
-  copyGrayscaleIntoChannel(roughnessImage, scratchCtx, output.data, width, height, 1);
-
-  const metallicImage = await loadImage(METALLIC_URL);
-  copyGrayscaleIntoChannel(metallicImage, scratchCtx, output.data, width, height, 2);
+  await copyUrlIntoChannel(ROUGHNESS_URL, scratchCtx, output.data, width, height, 1);
+  await copyUrlIntoChannel(METALLIC_URL, scratchCtx, output.data, width, height, 2);
 
   outputCtx.putImageData(output, 0, 0);
 
@@ -311,6 +309,19 @@ async function buildOrmTexture(): Promise<CanvasTexture> {
   texture.anisotropy = 4;
   texture.needsUpdate = true;
   return texture;
+}
+
+async function copyUrlIntoChannel(
+  url: string,
+  ctx: CanvasRenderingContext2D,
+  output: Uint8ClampedArray,
+  width: number,
+  height: number,
+  channel: 0 | 1 | 2,
+): Promise<void> {
+  const image = await loadImage(url);
+  copyGrayscaleIntoChannel(image, ctx, output, width, height, channel);
+  image.src = '';
 }
 
 function copyGrayscaleIntoChannel(

@@ -15,7 +15,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V11-OCTOPUS-CRABS';
+const BUILD_TAG = 'BUILD-MODE-V12-PHYSICAL-SNAP-BULBS';
 
 /**
  * Bootstrap.

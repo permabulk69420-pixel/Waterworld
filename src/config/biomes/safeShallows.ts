@@ -56,10 +56,9 @@ export const SAFE_SHALLOWS: BiomeConfig = {
   // density values describe authored scatter rather than one draw call per prop.
   spawnDensity: {
     vegetation: 0.12,
-    // About two 3-4 m boulders per 64 m chunk on average. The rock system keeps
-    // only nearby instances submitted, so this stays cheap while breaking up the
-    // otherwise bare seabed silhouette.
-    rocks: 0.05,
+    // Sparse large landmarks: roughly one 3-4 m boulder per two 64 m chunks on
+    // average. The rock system keeps only nearby instances submitted.
+    rocks: 0.0125,
     resources: 0,
     creatures: 0,
     structures: 0,

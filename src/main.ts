@@ -1,6 +1,7 @@
 import { BuildSystem } from './build/BuildSystem.ts';
 import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
+import { PrismFishSystem } from './content/PrismFishSystem.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
 import { BioluminescentPlankton } from './environment/BioluminescentPlankton.ts';
 import { HandThrusters } from './player/HandThrusters.ts';
@@ -11,7 +12,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V7-DARK-NIGHT-LIT-THRUSTERS';
+const BUILD_TAG = 'BUILD-MODE-V8-PRISM-FAUNA';
 
 /**
  * Bootstrap.
@@ -79,6 +80,16 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · loading shallow vegetation`);
   await seaGrass.ready;
 
+  const prismFish = new PrismFishSystem(
+    game.scene,
+    game.density,
+    game.biomes,
+    game.environment,
+    game.rig,
+  );
+  settings.setStatus(`${BUILD_TAG} · loading prism fish`);
+  await prismFish.ready;
+
   const hands = new VRHands(game.renderer, game.rig.group);
   settings.setStatus(`${BUILD_TAG} · loading VR hands`);
   await hands.ready;
@@ -142,6 +153,7 @@ async function bootstrap(): Promise<void> {
     // Spawned motors used to be unlit MeshBasicMaterial. Convert each new pickup
     // once so it now darkens naturally with the rest of the underwater scene.
     thrusterLighting?.update();
+    prismFish.update(dt, elapsed);
     plankton.update(dt, elapsed);
     // Run after the motors so an anchored hand can cancel propulsion for the
     // current frame while the player physically pulls against the rear ledge.

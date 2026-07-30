@@ -3,6 +3,7 @@ import { BuildSystem } from './build/BuildSystem.ts';
 import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { AlienFishSystem } from './content/AlienFishSystem.ts';
+import { GiantMushroomSystem } from './content/GiantMushroomSystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
 import { RiverRockSystem } from './content/RiverRockSystem.ts';
@@ -17,7 +18,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V14-ALIEN-FISH';
+const BUILD_TAG = 'BUILD-MODE-V15-GIANT-MUSHROOMS';
 
 /**
  * Bootstrap.
@@ -89,6 +90,11 @@ async function bootstrap(): Promise<void> {
   game.content.register(seaGrass);
   settings.setStatus(`${BUILD_TAG} · loading shallow vegetation`);
   await seaGrass.ready;
+
+  const giantMushrooms = new GiantMushroomSystem(game.scene);
+  game.content.register(giantMushrooms);
+  settings.setStatus(`${BUILD_TAG} · loading giant alien mushrooms`);
+  await giantMushrooms.ready;
 
   const prismFish = new PrismFishSystem(
     game.scene,

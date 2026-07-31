@@ -40,6 +40,8 @@ export class Locomotion {
   private turnRate = 0;
   private swimming = true;
   private externalClimbActive = false;
+  /** 0 = no lift bladder; 1/2 are one or two physically held buoyant bladders. */
+  private externalBuoyancy = 0;
   /** Sum of the two tracked hand-motor directions, each weighted 0..1 by trigger. */
   private readonly propulsionInput = new Vector3();
 
@@ -70,6 +72,19 @@ export class Locomotion {
 
   clearPropulsionInput(): void {
     this.propulsionInput.set(0, 0, 0);
+  }
+
+  /**
+   * Supplies biological upward lift from physically held objects. Strength is
+   * intentionally continuous, although the lift-bladder system currently feeds
+   * 0, 1 or 2 for the number of occupied hands.
+   */
+  setExternalBuoyancy(strength: number): void {
+    this.externalBuoyancy = MathUtils.clamp(strength, 0, 2);
+  }
+
+  clearExternalBuoyancy(): void {
+    this.externalBuoyancy = 0;
   }
 
   /**
@@ -134,14 +149,23 @@ export class Locomotion {
       this.updateAboveWaterVelocity(dt, intent);
     }
 
+    this.applyExternalBuoyancy(dt);
     this.move(dt);
 
     if (this.swimming && haveSurface) {
       this.rig.getHeadPosition(_head);
 
+      // A lift bladder is deliberately allowed to carry the player through the
+      // water/air boundary. Without this branch the ordinary swimmer surface clamp
+      // would pin their eyes to the wave and the biological balloon could never be
+      // used to reach floating islands.
+      if (this.externalBuoyancy > 0) {
+        if (_head.y > localSurface + cfg.surfaceEyeClearance + 0.22) {
+          this.swimming = false;
+        }
       // If collision with real terrain has lifted the body clear of the water,
       // treat that as climbing onto shore instead of yanking the player back down.
-      if (this.state.grounded && _head.y > localSurface + cfg.surfaceExitClearance) {
+      } else if (this.state.grounded && _head.y > localSurface + cfg.surfaceExitClearance) {
         this.swimming = false;
         if (this.velocity.y < 0) this.velocity.y = 0;
       } else {
@@ -173,8 +197,8 @@ export class Locomotion {
     _target.addScaledVector(_right, intent.strafe * speed);
     _target.addScaledVector(WORLD_UP, intent.vertical * cfg.verticalSpeed);
 
-    // Ease upward swimming away as the player's eyes approach the wave. This
-    // catches both explicit ascend input and vertical movement caused by looking up.
+    // Ease ordinary upward swimming away as the player's eyes approach the wave.
+    // Biological buoyancy is added later and intentionally bypasses this cap.
     if (surfaceHeadCap !== undefined && _target.y > 0) {
       this.rig.getHeadPosition(_head);
       const remaining = surfaceHeadCap - _head.y;
@@ -235,12 +259,26 @@ export class Locomotion {
     this.velocity.x = damp(this.velocity.x, _target.x, rate, dt);
     this.velocity.z = damp(this.velocity.z, _target.z, rate, dt);
 
-    // Gravity is the key distinction from underwater locomotion: no more flying
-    // once the body is actually clear of the sea.
-    this.velocity.y = Math.max(
-      this.velocity.y - cfg.gravity * dt,
-      -cfg.terminalFallSpeed,
-    );
+    // A held lift bladder supports the player's weight. The biological pull is
+    // applied immediately after this method, so gravity resumes on the very first
+    // frame after the player lets go instead of turning the balloon into a jetpack.
+    if (this.externalBuoyancy <= 0) {
+      this.velocity.y = Math.max(
+        this.velocity.y - cfg.gravity * dt,
+        -cfg.terminalFallSpeed,
+      );
+    }
+  }
+
+  private applyExternalBuoyancy(dt: number): void {
+    if (this.externalBuoyancy <= 0) return;
+
+    // One bladder is intentionally enough to make the mechanic useful. A second
+    // bladder is faster rather than merely redundant, which leaves room for later
+    // cargo / giant-bladder variants without changing locomotion again.
+    const targetAscentSpeed = 2.2 + (this.externalBuoyancy - 1) * 1.4;
+    const pullRate = 5.2 + this.externalBuoyancy * 1.3;
+    this.velocity.y = damp(this.velocity.y, targetAscentSpeed, pullRate, dt);
   }
 
   /** Sweeps the capsule, resolving collisions, and moves the rig to match. */
@@ -300,6 +338,7 @@ export class Locomotion {
     this.turnRate = 0;
     this.externalClimbActive = false;
     this.clearPropulsionInput();
+    this.clearExternalBuoyancy();
     this.rig.setHeadPosition(position);
   }
 

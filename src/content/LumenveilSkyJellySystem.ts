@@ -36,7 +36,11 @@ const RESIDENT_ORBIT_RADIUS = 48;
 const RESIDENT_ORBIT_SPEED = 0.075;
 const RESIDENT_BASE_HEIGHT_ABOVE_TREE_ROOT = 56;
 
-const GLOW_HINT = /biolum|glow|lumen|vein|organ|cyan|violet|tip/i;
+// Be deliberately strict here. The original pass also matched words such as
+// "lumen", "cyan" and "violet", which caused ordinary body membranes to become
+// emissive. Only the GLB's explicit vein/organ/tentacle glow geometry gets driven.
+const SELECTIVE_GLOW_HINT =
+  /DorsalVeinNetwork|GlowOrgans|LiftOrganCluster|GlowNode|GlowTip|BiolumeVein/i;
 const CYAN = new Color(0x55eeff);
 const VIOLET = new Color(0xaa78ff);
 
@@ -80,8 +84,8 @@ function smoothRate(rate: number, dt: number): number {
  * The GLB explicitly declares runtime-controlled world movement, a suggested
  * 4.2 m/s cruise speed and a 14-60 m wander altitude. Its baked animation is used
  * only for local body/tentacle motion while this system supplies the actual flight
- * path. Emissive organs are material-cloned per creature and faded from a tiny day
- * glow into strong pulsing bioluminescence as Environment.daylight falls.
+ * path. Only explicit bioluminescent vein/organ/tip meshes glow at night; the bell,
+ * sails and ordinary body tissue remain conventionally lit PBR surfaces.
  */
 export class LumenveilSkyJellySystem {
   readonly ready: Promise<void>;
@@ -224,9 +228,17 @@ export class LumenveilSkyJellySystem {
     output: GlowMaterialState[],
   ): void {
     const hint = `${meshName} ${material.name}`;
-    const hasEmission =
-      material.emissiveMap !== null || material.emissive.r + material.emissive.g + material.emissive.b > 0.015;
-    if (!hasEmission && !GLOW_HINT.test(hint)) return;
+
+    // Some authored body materials carry a tiny emissive value for previewing, but
+    // that does not mean the whole animal should self-illuminate in-game. Strip all
+    // emission from non-biological-glow geometry, including any emissive map.
+    if (!SELECTIVE_GLOW_HINT.test(hint)) {
+      material.emissive.setRGB(0, 0, 0);
+      material.emissiveIntensity = 0;
+      material.emissiveMap = null;
+      material.needsUpdate = true;
+      return;
+    }
 
     const color = material.emissive.clone();
     if (color.r + color.g + color.b < 0.015) {
@@ -234,13 +246,13 @@ export class LumenveilSkyJellySystem {
     }
 
     const authored = Math.max(0.1, material.emissiveIntensity || 1);
-    const nightIntensity = Math.max(2.8, authored * 2.6);
+    const nightIntensity = Math.max(2.2, authored * 2.0);
     material.emissive.copy(color);
-    material.emissiveIntensity = 0.02;
+    material.emissiveIntensity = 0.01;
     output.push({
       material,
       color,
-      dayIntensity: 0.02,
+      dayIntensity: 0.01,
       nightIntensity,
     });
   }

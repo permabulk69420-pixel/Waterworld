@@ -8,6 +8,7 @@ import { FruitMushroomSystem } from './content/FruitMushroomSystem.ts';
 import { GiantMushroomSystem } from './content/GiantMushroomSystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
+import { PrismFishGrabSystem } from './content/PrismFishGrabSystem.ts';
 import { RiftmawHunterSystem } from './content/RiftmawHunterSystem.ts';
 import { RiverRockSystem } from './content/RiverRockSystem.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
@@ -22,7 +23,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V24-RIFTMAW-HUNTER';
+const BUILD_TAG = 'BUILD-MODE-V25-GRABBABLE-PRISM-FISH';
 
 /**
  * Bootstrap.
@@ -153,6 +154,8 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · loading VR hands`);
   await hands.ready;
 
+  const prismFishGrab = new PrismFishGrabSystem(game.renderer, hands, game.scene, prismFish);
+
   const fruitMushrooms = new FruitMushroomSystem(
     game.scene,
     game.renderer,
@@ -241,6 +244,7 @@ async function bootstrap(): Promise<void> {
     // once so it now darkens naturally with the rest of the underwater scene.
     thrusterLighting?.update();
     prismFish.update(dt, elapsed);
+    prismFishGrab.update();
     alienFish.update(dt, elapsed);
     riftmawHunter.update(dt, elapsed);
     speargun?.update(dt);
@@ -303,7 +307,7 @@ async function bootstrap(): Promise<void> {
   if (mode === 'build') {
     hint.textContent = 'BUILD · right-hand laser aims · right trigger selects · right grip grabs pointed prop · left trigger menu · A/X up · B/Y down';
   } else {
-    hint.textContent = 'STORY · right grip picks up speargun · right trigger fires · grip hanging mushroom fruit to harvest · tap head to toggle lamp';
+    hint.textContent = 'STORY · right grip picks up speargun · right trigger fires · grip nearby prism fish to catch/release · grip hanging mushroom fruit to harvest · tap head to toggle lamp';
   }
 
   boot.classList.add('hidden');

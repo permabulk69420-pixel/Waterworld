@@ -126,7 +126,7 @@ export class LumenveilSkyJellySystem {
 
       console.info(
         `[lumenveil] loaded ${_size.x.toFixed(2)} x ${_size.y.toFixed(2)} x ${_size.z.toFixed(2)} m; ` +
-          `${this.jellies.length} total (${ROAMING_COUNT} roaming + 1 colossus resident); ` +
+          `${TOTAL_COUNT} intended / ${this.jellies.length} spawned (${ROAMING_COUNT} roaming + 1 colossus resident); ` +
           `clips=${this.clips.map((clip) => clip.name).join(', ') || 'none'}`,
       );
     } catch (error) {

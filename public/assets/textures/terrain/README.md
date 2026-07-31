@@ -1,22 +1,14 @@
 # Terrain textures
 
-Drop the replacement Safe Shallows terrain PBR textures directly in this folder.
+Active shallow-terrain PBR set:
 
-## Current replacement set
+- `coast_land_rocks_01_diff_1k.jpg` — base colour / albedo (sRGB)
+- `coast_land_rocks_01_nor_gl_1k.exr` — OpenGL normal map (linear)
+- `coast_land_rocks_01_rough_1k.exr` — roughness map (linear)
+- `coast_land_rocks_01_disp_1k.png` — height/displacement source (linear)
 
-Use these exact filenames:
+The current WebXR terrain material loads the EXR normal and roughness maps directly with Three.js `EXRLoader`, so no phone-side conversion is required.
 
-- `coast_land_rocks_01_diff_1k.jpg` — base colour / albedo
-- `coast_land_rocks_01_nor_gl_1k.png` — OpenGL normal map
-- `coast_land_rocks_01_rough_1k.png` — roughness map
-- `coast_land_rocks_01_disp_1k.png` — displacement / height map (optional for the first pass, but keep it here)
+The displacement map is currently used only for restrained micro-relief shading. It does **not** physically displace or tessellate the terrain mesh; that would be far too expensive for the standalone Quest terrain budget.
 
-The source normal and roughness textures are EXR files. Convert those two EXRs to PNG before uploading; do not change their colour/data values while converting.
-
-Do not upload the `.blend` file for runtime use.
-
-Once all three required runtime maps (diffuse, normal, roughness) are present, `src/environment/TerrainMaterial.ts` should be changed to load this set and the current procedurally-generated sand PBR textures should be removed completely.
-
-The terrain mesh has no authored UVs, so the replacement texture set should continue to use world-space projection / tiling across streamed terrain chunks.
-
-The displacement map is intentionally not required for true geometry displacement on Quest. It can later be used for subtle material/parallax/detail work if useful without tessellating the terrain.
+The old generated PBR sand texture set has been removed from the terrain material. These scanned maps are world-space projected onto shallow, upward-facing terrain and fade out on steep/deep surfaces.

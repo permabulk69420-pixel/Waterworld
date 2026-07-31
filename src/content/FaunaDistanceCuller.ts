@@ -1,8 +1,13 @@
-import { Object3D, Vector3, type Scene } from 'three';
+import { Group, Object3D, Vector3, type Scene } from 'three';
 import type { PlayerRig } from '../player/PlayerRig.ts';
 
 const _player = new Vector3();
 const _world = new Vector3();
+
+interface FaunaCullEntry {
+  root: Object3D;
+  wrapper: Group;
+}
 
 /**
  * Distance cap for fauna systems that live directly under the scene rather than
@@ -11,12 +16,15 @@ const _world = new Vector3();
  * Normal fish use the user-selected fauna range. Tiny seabed creatures use a
  * shorter size-aware fraction, large predators get a longer range, and huge
  * aerial/landmark fauna are deliberately exempt so their silhouettes do not pop.
- * This only controls visibility; each fauna system remains authoritative for
- * spawning, AI state and whether a pooled creature should exist at all.
+ *
+ * Each managed creature gets an identity wrapper that owns only distance
+ * visibility. The fauna system keeps full ownership of the creature root's own
+ * `visible` state, so a pooled/dead fish can never be accidentally resurrected
+ * when the player swims back inside the distance threshold.
  */
 export class FaunaDistanceCuller {
-  private readonly roots: Object3D[] = [];
-  private readonly hiddenByDistance = new WeakSet<Object3D>();
+  private readonly entries: FaunaCullEntry[] = [];
+  private readonly wrappers = new WeakMap<Object3D, Group>();
   private rescanTimer = 0;
 
   constructor(
@@ -34,38 +42,48 @@ export class FaunaDistanceCuller {
 
     this.rig.getHeadPosition(_player);
 
-    for (const root of this.roots) {
+    for (const { root, wrapper } of this.entries) {
       const distance = this.distanceFor(root);
       if (!Number.isFinite(distance)) continue;
 
       root.getWorldPosition(_world);
       const distanceSq = _world.distanceToSquared(_player);
-      const currentlyDistanceHidden = this.hiddenByDistance.has(root);
       // A little hysteresis prevents a fish flickering while it circles the cutoff.
-      const threshold = currentlyDistanceHidden ? distance * 0.93 : distance * 1.04;
-      const outside = distanceSq > threshold * threshold;
-
-      if (outside) {
-        if (root.visible) {
-          root.visible = false;
-          this.hiddenByDistance.add(root);
-        }
-      } else if (currentlyDistanceHidden) {
-        // Only restore objects that this class hid. Pooled/dead fauna left hidden
-        // by their own system are never accidentally resurrected.
-        root.visible = true;
-        this.hiddenByDistance.delete(root);
-      }
+      const threshold = wrapper.visible ? distance * 1.04 : distance * 0.93;
+      wrapper.visible = distanceSq <= threshold * threshold;
     }
   }
 
   private rescan(): void {
-    this.roots.length = 0;
+    const candidates: Object3D[] = [];
     this.scene.traverse((object) => {
       if (!object.name.startsWith('fauna:')) return;
       if (this.isLandmarkFauna(object)) return;
-      this.roots.push(object);
+      candidates.push(object);
     });
+
+    this.entries.length = 0;
+    for (const root of candidates) {
+      const wrapper = this.ensureWrapper(root);
+      if (wrapper) this.entries.push({ root, wrapper });
+    }
+  }
+
+  private ensureWrapper(root: Object3D): Group | null {
+    const existing = this.wrappers.get(root);
+    if (existing) return existing;
+
+    const parent = root.parent;
+    if (!parent) return null;
+
+    const wrapper = new Group();
+    wrapper.name = `distance-cull:${root.name}`;
+    wrapper.userData.distanceCullWrapper = true;
+    parent.add(wrapper);
+    // Preserve the root's world transform while inserting an identity parent.
+    wrapper.attach(root);
+    this.wrappers.set(root, wrapper);
+    return wrapper;
   }
 
   private isLandmarkFauna(root: Object3D): boolean {

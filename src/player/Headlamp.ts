@@ -99,7 +99,10 @@ export class Headlamp {
     this.target.name = 'player-headlamp-target';
     this.scene.add(this.target);
 
-    this.light = new SpotLight(0xdaf4ff, 75, 34, 0.42, 0.62, 1.25);
+    // A fairly soft falloff keeps the near-field brightness useful without making
+    // the beam collapse after ~10 m. The finite 60 m range still gives us a hard
+    // performance/visual bound while preserving an obvious underwater torch cone.
+    this.light = new SpotLight(0xdaf4ff, 64, 60, 0.42, 0.62, 0.65);
     this.light.name = 'player-headlamp-light';
     this.light.castShadow = false;
     this.light.visible = false;

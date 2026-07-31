@@ -1,0 +1,42 @@
+name: Validate distance budgets
+
+on:
+  push:
+    paths:
+      - '.github/workflows/validate-distance-budgets.yml'
+      - 'src/main.ts'
+      - 'src/ui/BootSettings.ts'
+      - 'src/content/ContentRegistry.ts'
+      - 'src/content/FaunaDistanceCuller.ts'
+      - 'src/content/RiverRockSystem.ts'
+      - 'src/content/GiantMushroomSystem.ts'
+      - 'src/content/FruitMushroomSystem.ts'
+      - 'index.html'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Record successful validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .validation
+          printf 'distance budgets validated at %s\n' "$GITHUB_SHA" > .validation/distance-budgets.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .validation/distance-budgets.txt
+          git commit -m 'Validate distance budget build'
+          git push

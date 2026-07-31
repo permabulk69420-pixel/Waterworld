@@ -110,6 +110,10 @@ async function bootstrap(): Promise<void> {
     36,
     Math.min(100, detailRenderDistance * 0.38),
   );
+  // The 1-20 m mushroom family has a much larger silhouette than rocks or grass,
+  // so keep it visible slightly beyond the ordinary detail budget. The 100 m
+  // Colossus is a true landmark and remains outside this budget entirely.
+  const largeFloraDistance = Math.min(420, detailRenderDistance * 1.2);
 
   const riverRocks = new RiverRockSystem(game.scene, {
     renderDistance: detailRenderDistance,
@@ -131,7 +135,9 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · growing ribbon-kelp boundary forest`);
   await ribbonKelp.ready;
 
-  const giantMushrooms = new GiantMushroomSystem(game.scene);
+  const giantMushrooms = new GiantMushroomSystem(game.scene, {
+    renderDistance: largeFloraDistance,
+  });
   game.content.register(giantMushrooms);
   settings.setStatus(`${BUILD_TAG} · loading giant alien mushrooms`);
   await giantMushrooms.ready;
@@ -225,6 +231,7 @@ async function bootstrap(): Promise<void> {
     game.renderer,
     hands,
     mode,
+    { renderDistance: largeFloraDistance },
   );
   game.content.register(fruitMushrooms);
   settings.setStatus(`${BUILD_TAG} · loading harvestable fruit mushrooms`);

@@ -25,11 +25,23 @@ const ASSET_URLS = [
 ] as const;
 
 const UP = new Vector3(0, 1, 0);
+const GROWTH_UP = new Vector3();
 
-// The authored patch is only about 5.7 m tall. Runtime scaling turns it into a
-// 9-16 m canopy where water depth allows, while keeping the source meshes tiny.
+// The authored patch is only about 5.7 m tall. Shallow kelp stays in the 9-16 m
+// range, but deep-edge specimens increasingly stretch toward the surface.
 const MIN_TARGET_HEIGHT = 9;
 const MAX_TARGET_HEIGHT = 16;
+const DEEP_HEIGHT_START = 14;
+const DEEP_HEIGHT_FULL = 34;
+const DEEP_SURFACE_GAP_MIN = 1.3;
+const DEEP_SURFACE_GAP_MAX = 3.8;
+const MAX_DEEP_TARGET_HEIGHT = 46;
+
+// Deep water uses fewer, larger plants. This prevents a 40 m-tall forest from
+// becoming a solid geometry wall while preserving a dense silhouette in shallows.
+const DEEP_DENSITY_MULTIPLIER = 0.36;
+const BASE_SINK = 0.18;
+const MAX_BASE_TILT_DEGREES = 12;
 
 // Kelp occupies almost the full outer chunk ring. The final few metres are left
 // clear so no instance base hangs over the temporary terrain edge.
@@ -39,7 +51,7 @@ const PATCHES_PER_SQUARE_METRE = 0.04;
 
 // Chunk clusters outside this range are hidden. Inside it, normal Three.js
 // frustum culling rejects clusters behind the player without rebuilding buffers.
-const RENDER_DISTANCE = 122;
+const RENDER_DISTANCE = 240;
 const CULL_REBUILD_DISTANCE = 4;
 const CULL_REBUILD_DISTANCE_SQ = CULL_REBUILD_DISTANCE * CULL_REBUILD_DISTANCE;
 const SWAY_BOUNDS_MARGIN = 0.9;
@@ -219,27 +231,64 @@ uniform float uRibbonKelpTime;`,
     );
     const candidates = ctx.sampleSeabedPoints(candidateCount, 0.62);
     const matricesByVariant: [Matrix4[], Matrix4[]] = [[], []];
+    const maxTilt = MathUtils.degToRad(MAX_BASE_TILT_DEGREES);
 
     for (const point of candidates) {
       const edgeDistance = this.distanceToOuterEdge(point.position.x, point.position.z);
       if (edgeDistance < FOREST_OUTER_MARGIN || edgeDistance > FOREST_INNER_DEPTH) continue;
       if (point.depth < 3.5 || point.depth > 50) continue;
 
+      const deepLinear = MathUtils.clamp(
+        (point.depth - DEEP_HEIGHT_START) / (DEEP_HEIGHT_FULL - DEEP_HEIGHT_START),
+        0,
+        1,
+      );
+      const deepFactor = deepLinear * deepLinear * (3 - 2 * deepLinear);
+      const keepProbability = MathUtils.lerp(1, DEEP_DENSITY_MULTIPLIER, deepFactor);
+      if (!ctx.rng.chance(keepProbability)) continue;
+
       const variant = ctx.rng.chance(0.5) ? 0 : 1;
       const source = this.sources[variant];
-      const desiredHeight = ctx.rng.range(MIN_TARGET_HEIGHT, MAX_TARGET_HEIGHT);
-      // Avoid a forest of rigid poles sticking far above shallow water. In deep
-      // sections the full 9-16 m silhouette is retained.
-      const waterLimitedHeight = Math.max(4.2, point.depth - ctx.rng.range(0.2, 0.8));
-      const targetHeight = Math.min(desiredHeight, waterLimitedHeight);
+
+      const shallowHeight = ctx.rng.range(MIN_TARGET_HEIGHT, MAX_TARGET_HEIGHT);
+      const nearSurfaceHeight = Math.min(
+        MAX_DEEP_TARGET_HEIGHT,
+        Math.max(
+          shallowHeight,
+          point.depth - ctx.rng.range(DEEP_SURFACE_GAP_MIN, DEEP_SURFACE_GAP_MAX),
+        ),
+      );
+      const requestedHeight = MathUtils.lerp(shallowHeight, nearSurfaceHeight, deepFactor);
+      const waterLimitedHeight = Math.max(4.2, point.depth - ctx.rng.range(0.35, 0.9));
+      const targetHeight = Math.min(requestedHeight, waterLimitedHeight);
 
       const horizontalScale = ctx.rng.range(
         variant === 0 ? 1.05 : 0.92,
         variant === 0 ? 1.42 : 1.25,
       );
 
-      this.dummy.position.copy(point.position).addScaledVector(point.normal, 0.025);
-      this.dummy.quaternion.setFromUnitVectors(UP, point.normal);
+      // The holdfast can attach to a sloping seabed, but the organism itself is
+      // buoyant/phototropic and should still grow upward. Limit the whole patch to
+      // a small lean instead of rotating it fully onto the terrain normal.
+      const horizontalNormal = Math.hypot(point.normal.x, point.normal.z);
+      if (horizontalNormal <= 1e-5) {
+        GROWTH_UP.copy(UP);
+      } else {
+        const sourceTilt = Math.atan2(horizontalNormal, Math.max(1e-5, point.normal.y));
+        const limitedTilt = Math.min(sourceTilt, maxTilt);
+        const horizontalWeight = Math.sin(limitedTilt) / horizontalNormal;
+        GROWTH_UP.set(
+          point.normal.x * horizontalWeight,
+          Math.cos(limitedTilt),
+          point.normal.z * horizontalWeight,
+        ).normalize();
+      }
+
+      // Sink the chunky authored holdfast/base into the seabed so only the organic
+      // transition into the ribbons is visible above the terrain.
+      this.dummy.position.copy(point.position);
+      this.dummy.position.y -= BASE_SINK;
+      this.dummy.quaternion.setFromUnitVectors(UP, GROWTH_UP);
       this.dummy.rotateY(ctx.rng.range(0, Math.PI * 2));
       this.dummy.scale.set(
         horizontalScale * ctx.rng.range(0.9, 1.12),
@@ -455,4 +504,3 @@ function createWallCollider(vertices: readonly number[]): ChunkCollider {
     8,
   );
 }
-

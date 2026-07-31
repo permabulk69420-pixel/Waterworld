@@ -15,8 +15,14 @@ const MAX_HEIGHT = 20;
 const SURFACE_HEADROOM = 0.8;
 const START_AREA_CLEAR_RADIUS = 20;
 const START_AREA_CLEAR_RADIUS_SQ = START_AREA_CLEAR_RADIUS * START_AREA_CLEAR_RADIUS;
-const RENDER_DISTANCE = 190;
-const RENDER_DISTANCE_SQ = RENDER_DISTANCE * RENDER_DISTANCE;
+const DEFAULT_RENDER_DISTANCE = 190;
+const MIN_RENDER_DISTANCE = 100;
+const MAX_RENDER_DISTANCE = 420;
+
+export interface GiantMushroomOptions {
+  /** Visibility range for these large-but-non-colossus flora. */
+  renderDistance?: number;
+}
 
 interface MushroomPlacement {
   root: Group;
@@ -38,11 +44,20 @@ export class GiantMushroomSystem implements ContentPopulator {
   readonly ready: Promise<void>;
 
   private readonly chunks = new Map<string, MushroomPlacement[]>();
+  private readonly renderDistanceSq: number;
   private template: Group | null = null;
   private authoredHeight = 1;
   private loadFailed = false;
 
-  constructor(private readonly parent: Object3D) {
+  constructor(
+    private readonly parent: Object3D,
+    options: GiantMushroomOptions = {},
+  ) {
+    const renderDistance = Math.max(
+      MIN_RENDER_DISTANCE,
+      Math.min(MAX_RENDER_DISTANCE, options.renderDistance ?? DEFAULT_RENDER_DISTANCE),
+    );
+    this.renderDistanceSq = renderDistance * renderDistance;
     this.ready = this.load();
   }
 
@@ -152,7 +167,7 @@ export class GiantMushroomSystem implements ContentPopulator {
       for (const placement of placements) {
         const dx = placement.position.x - playerPosition.x;
         const dz = placement.position.z - playerPosition.z;
-        placement.root.visible = dx * dx + dz * dz <= RENDER_DISTANCE_SQ;
+        placement.root.visible = dx * dx + dz * dz <= this.renderDistanceSq;
       }
     }
   }

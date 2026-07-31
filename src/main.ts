@@ -4,6 +4,7 @@ import { Game } from './core/Game.ts';
 import { DEFAULT_WORLD_CONFIG } from './config/worldConfig.ts';
 import { AlienFishSystem } from './content/AlienFishSystem.ts';
 import { ColossusMushroomSystem } from './content/ColossusMushroomSystem.ts';
+import { FaunaDistanceCuller } from './content/FaunaDistanceCuller.ts';
 import { FruitMushroomSystem } from './content/FruitMushroomSystem.ts';
 import { GiantMushroomSystem } from './content/GiantMushroomSystem.ts';
 import { LiftBladderPlantSystem } from './content/LiftBladderPlantSystem.ts';
@@ -26,19 +27,21 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V28-RIBBON-KELP-EDGE-FOREST';
+const BUILD_TAG = 'BUILD-MODE-V29-DISTANCE-BUDGETS';
 
 /**
  * Bootstrap.
  *
  * URL parameters (all optional):
- *   ?seed=12345         world seed
- *   ?mode=build         launch Build mode directly
- *   ?debug=1            start with the debug HUD visible
- *   ?view=4             initial terrain load-distance slider value
- *   ?grassDensity=100   initial grass density percentage
- *   ?grassDistance=46   initial grass render distance in metres
- *   ?workers=0          force main-thread terrain generation
+ *   ?seed=12345           world seed
+ *   ?mode=build           launch Build mode directly
+ *   ?debug=1              start with the debug HUD visible
+ *   ?view=4               initial terrain load-distance slider value
+ *   ?grassDensity=100     initial vegetation density percentage
+ *   ?detailDistance=240   rocks / plants / prop render budget in metres
+ *   ?faunaDistance=85     normal fauna render budget in metres
+ *   ?grassDistance=46     legacy alias; converted into the new detail scale
+ *   ?workers=0            force main-thread terrain generation
  */
 const params = new URLSearchParams(location.search);
 const number = (key: string): number | undefined => {
@@ -48,6 +51,11 @@ const number = (key: string): number | undefined => {
   return Number.isFinite(value) ? value : undefined;
 };
 
+const legacyGrassDistance = number('grassDistance');
+const urlDetailDistance =
+  number('detailDistance') ??
+  (legacyGrassDistance !== undefined ? legacyGrassDistance * 5 : undefined);
+
 const boot = document.getElementById('boot')!;
 const bootFill = document.getElementById('boot-fill')!;
 const hint = document.getElementById('hint')!;
@@ -55,7 +63,8 @@ const hudElement = document.getElementById('debug-hud')!;
 const settings = new BootSettings(
   number('view'),
   number('grassDensity'),
-  number('grassDistance'),
+  urlDetailDistance,
+  number('faunaDistance'),
   params.get('mode'),
 );
 settings.setStatus(`${BUILD_TAG} · choose mode and performance settings`);
@@ -65,7 +74,8 @@ async function bootstrap(): Promise<void> {
     mode,
     viewDistanceChunks,
     grassDensityPercent,
-    grassRenderDistance,
+    detailRenderDistance,
+    faunaRenderDistance,
   } = await settings.waitForStart();
 
   const baseBounds = DEFAULT_WORLD_CONFIG.playableBounds;
@@ -86,6 +96,21 @@ async function bootstrap(): Promise<void> {
     },
   });
 
+  // One shared content budget now caps every chunk-populated layer. New rocks,
+  // vegetation and chunk creatures inherit these ranges automatically.
+  game.content.setVisibilityDistances({
+    detailDistance: detailRenderDistance,
+    faunaDistance: faunaRenderDistance,
+  });
+
+  // Ultra-dense micro vegetation is intentionally a shorter fraction of the
+  // general detail range. At the default 240 m detail budget this gives ~91 m
+  // grass visibility instead of submitting a carpet for the entire terrain ring.
+  const fineVegetationDistance = Math.max(
+    36,
+    Math.min(125, detailRenderDistance * 0.38),
+  );
+
   const riverRocks = new RiverRockSystem(game.scene);
   game.content.register(riverRocks);
   settings.setStatus(`${BUILD_TAG} · loading PBR river rocks`);
@@ -93,7 +118,7 @@ async function bootstrap(): Promise<void> {
 
   const seaGrass = new SeaGrassSystem(game.scene, {
     densityMultiplier: grassDensityPercent / 100,
-    renderDistance: grassRenderDistance,
+    renderDistance: fineVegetationDistance,
   });
   game.content.register(seaGrass);
   settings.setStatus(`${BUILD_TAG} · loading shallow vegetation`);
@@ -167,6 +192,11 @@ async function bootstrap(): Promise<void> {
   );
   settings.setStatus(`${BUILD_TAG} · loading octopus crabs`);
   await octopusCrabs.ready;
+
+  // Global fauna are not children of streamed chunks, so give them the same user
+  // budget through a lightweight size-aware visibility pass. Massive aerial fauna
+  // are deliberately exempt and the Riftmaw gets a much longer silhouette range.
+  const faunaCuller = new FaunaDistanceCuller(game.scene, game.rig, faunaRenderDistance);
 
   const hands = new VRHands(game.renderer, game.rig.group);
   settings.setStatus(`${BUILD_TAG} · loading VR hands`);
@@ -283,6 +313,9 @@ async function bootstrap(): Promise<void> {
     riftmawHunter.update(dt, elapsed);
     speargun?.update(dt);
     octopusCrabs.update(dt);
+    // Run after the fauna systems so this remains the final visibility cap; their
+    // AI/spawn logic stays authoritative and pooled creatures are never revived.
+    faunaCuller.update(dt);
     plankton.update(dt, elapsed);
     colossusMushroom.update(elapsed);
     // Run after the motors so an anchored hand can cancel propulsion for the

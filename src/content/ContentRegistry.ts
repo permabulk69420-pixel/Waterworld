@@ -36,6 +36,18 @@ export const CONTENT_LAYERS: readonly ContentLayer[] = [
   'caveProps',
 ];
 
+export interface ContentVisibilityDistances {
+  /** Reference distance for ordinary vegetation, rocks and world props. */
+  detailDistance: number;
+  /** Reference distance for ordinary creature content. */
+  faunaDistance: number;
+}
+
+interface ChunkVisibilityRecord {
+  root: Group;
+  bounds: Box3;
+}
+
 export interface SurfacePoint {
   position: Vector3;
   normal: Vector3;
@@ -91,8 +103,16 @@ export interface ContentPopulator {
   dispose?(key: string): void;
 }
 
+const VISIBILITY_REBUILD_DISTANCE = 2.5;
+const VISIBILITY_REBUILD_DISTANCE_SQ = VISIBILITY_REBUILD_DISTANCE * VISIBILITY_REBUILD_DISTANCE;
+
 export class ContentRegistry {
   private readonly populators: ContentPopulator[] = [];
+  private readonly chunkVisibility = new Map<string, ChunkVisibilityRecord>();
+  private readonly lastVisibilityPosition = new Vector3(Number.POSITIVE_INFINITY, 0, 0);
+  private visibilityDirty = true;
+  private detailDistance = Number.POSITIVE_INFINITY;
+  private faunaDistance = Number.POSITIVE_INFINITY;
 
   constructor(
     private readonly density: DensityField,
@@ -115,9 +135,27 @@ export class ContentRegistry {
     return this.populators.length;
   }
 
+  /**
+   * Sets the shared world-content distance budget.
+   *
+   * Individual systems may still use a shorter internal distance for extremely
+   * dense micro-detail. This layer is the authoritative upper bound for chunked
+   * content and means new rocks/plants/creatures automatically inherit sensible
+   * culling without each asset inventing another performance setting.
+   */
+  setVisibilityDistances(distances: ContentVisibilityDistances): void {
+    this.detailDistance = Math.max(1, distances.detailDistance);
+    this.faunaDistance = Math.max(1, distances.faunaDistance);
+    this.visibilityDirty = true;
+  }
+
   /** Update runtime content once from the game's existing frame loop. */
   update(dt: number, playerPosition: Vector3): void {
+    // Let specialised systems perform animation / local instance streaming first.
+    // Shared layer visibility runs last so the user's distance budget remains an
+    // upper bound even when a populator has its own internal culling policy.
     for (const populator of this.populators) populator.update?.(dt, playerPosition);
+    this.updateLayerVisibility(playerPosition);
   }
 
   /**
@@ -158,13 +196,66 @@ export class ContentRegistry {
       if (layerGroup.children.length > 0 || populator.keepsEmptyGroup) root.add(layerGroup);
     }
 
-    return root.children.length > 0 ? root : null;
+    if (root.children.length === 0) return null;
+
+    this.chunkVisibility.set(key, { root, bounds: bounds.clone() });
+    this.visibilityDirty = true;
+    return root;
   }
 
   /** Called by the chunk manager when a chunk unloads. */
   release(key: string, group: Group | null): void {
+    this.chunkVisibility.delete(key);
+    this.visibilityDirty = true;
     for (const populator of this.populators) populator.dispose?.(key);
     if (group) disposeSubtree(group);
+  }
+
+  private updateLayerVisibility(playerPosition: Vector3): void {
+    const dx = playerPosition.x - this.lastVisibilityPosition.x;
+    const dz = playerPosition.z - this.lastVisibilityPosition.z;
+    if (!this.visibilityDirty && dx * dx + dz * dz < VISIBILITY_REBUILD_DISTANCE_SQ) return;
+
+    for (const { root, bounds } of this.chunkVisibility.values()) {
+      const nearestX = Math.max(bounds.min.x, Math.min(bounds.max.x, playerPosition.x));
+      const nearestZ = Math.max(bounds.min.z, Math.min(bounds.max.z, playerPosition.z));
+      const ddx = playerPosition.x - nearestX;
+      const ddz = playerPosition.z - nearestZ;
+      const distanceSq = ddx * ddx + ddz * ddz;
+
+      for (const layerGroup of root.children) {
+        const layer = layerGroup.name as ContentLayer;
+        const distance = this.distanceForLayer(layer);
+        if (!Number.isFinite(distance)) continue;
+
+        // Small hysteresis prevents a whole chunk layer flickering if the player
+        // hovers right on the cutoff while swimming or bobbing at the surface.
+        const threshold = layerGroup.visible ? distance * 1.04 : distance * 0.96;
+        layerGroup.visible = distanceSq <= threshold * threshold;
+      }
+    }
+
+    this.lastVisibilityPosition.copy(playerPosition);
+    this.visibilityDirty = false;
+  }
+
+  private distanceForLayer(layer: ContentLayer): number {
+    switch (layer) {
+      case 'creatures':
+        return this.faunaDistance;
+      case 'resources':
+        return this.detailDistance * 0.9;
+      case 'caveProps':
+        return this.detailDistance * 0.82;
+      case 'structures':
+        // Buildings/wreck pieces have a much larger silhouette than grass or rocks.
+        return Math.max(this.detailDistance * 1.3, this.detailDistance + 36);
+      case 'vegetation':
+      case 'rocks':
+        return this.detailDistance;
+      default:
+        return Number.POSITIVE_INFINITY;
+    }
   }
 
   private createContext(

@@ -130,8 +130,9 @@ export class Environment {
 
     const surfaceY = this.ocean.heightAt(cameraPosition.x, cameraPosition.z, elapsed);
     this.depth = Math.max(0, surfaceY - cameraPosition.y);
-    // Blend the air/water volume over a wider band around eye height. The previous
-    // ~0.5 m transition made a visible clarity line when skimming the surface.
+    // Blend the air/water volume over a wider band around eye height. With the much
+    // clearer shallow-water density below, this blend now hides the surface transition
+    // instead of revealing a radically farther view through a thin strip.
     this.submergence = smoothstep(surfaceY + 0.32, surfaceY - 0.58, cameraPosition.y);
 
     const depthT = saturate(this.depth / this.maxDepth);
@@ -154,19 +155,23 @@ export class Environment {
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
 
-    // Shallow tropical water should remain spatially legible even at night. Darkness
-    // comes mainly from the lighting and near-black night water colour; using dense
-    // black fog as the darkness mechanism wastes already-rendered distance and creates
-    // a hard visibility jump at the surface. Relax density strongly near the surface,
-    // then fade the benefit away with depth so the abyss can still become genuinely
-    // opaque. Night is deliberately a little clearer than day to compensate for the
-    // much darker illumination, not because the water itself becomes more transparent.
-    const shallowClarity = this.submergence * Math.pow(1 - depthT, 1.45);
-    const baselineDensityEase = 1 - 0.28 * shallowClarity;
-    const daylightDensityEase = 1 - 0.08 * shallowClarity * this.daylight;
-    const nightDensityEase = 1 - 0.16 * shallowClarity * underwaterNight;
-    const adjustedWaterDensity =
-      waterDensity * baselineDensityEase * daylightDensityEase * nightDensityEase;
+    // The old shallow density still hid terrain after roughly 80-100 m even though
+    // chunks far beyond that were already rendered. Keep the upper ocean genuinely
+    // clear instead: the Safe Shallows' authored 0.016 density becomes ~0.005 near
+    // the surface. Only after roughly 18 m do we begin restoring the biome's stronger
+    // extinction, with the deep-water value taking over toward ~42 m. This keeps the
+    // abyss useful as an atmospheric/progression boundary without wasting render range
+    // throughout normal swimming depth.
+    const deepFogRamp = smoothstep(18, 42, this.depth);
+    const shallowDensityScale = 0.31;
+    const deepDensityScale = 0.92;
+    const depthDensityScale =
+      shallowDensityScale + (deepDensityScale - shallowDensityScale) * deepFogRamp;
+
+    // Let night be dark because of lighting and water colour, not because fog suddenly
+    // becomes a black wall. A small extra clarity boost keeps silhouettes readable.
+    const nightClarityScale = 1 - 0.10 * underwaterNight * (1 - deepFogRamp);
+    const adjustedWaterDensity = waterDensity * depthDensityScale * nightClarityScale;
 
     this.fog.density =
       AIR_FOG_DENSITY + (adjustedWaterDensity - AIR_FOG_DENSITY) * this.submergence;

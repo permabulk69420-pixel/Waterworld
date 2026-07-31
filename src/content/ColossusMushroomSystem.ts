@@ -19,7 +19,7 @@ const ASSET_URL = './assets/biomes/safe-shallows/alien_colossus_mushroom_60m_v1_
 // This is a navigation landmark, not scatter vegetation. Keep one specimen in a
 // fixed general direction from the starting area so players can learn the world by
 // silhouette rather than needing a HUD marker.
-const TARGET_HEIGHT = 60;
+const TARGET_HEIGHT = 100;
 const IDEAL_X = 118;
 const IDEAL_Z = -92;
 const SEARCH_RADIUS = 48;
@@ -42,10 +42,10 @@ interface GlowMaterialState {
 }
 
 /**
- * One 60 m alien-mushroom landmark for the Safe Shallows.
+ * One 100 m alien-mushroom landmark for the Safe Shallows.
  *
- * The current 60 m asset is authored Z-up, so the loader rotates it into Three.js
- * Y-up space before grounding and normalising the final visible height to 60 metres.
+ * The current 60 m source asset is authored Z-up, so the loader rotates it into Three.js
+ * Y-up space before grounding and normalising the final visible height to 100 metres.
  * Authored underside emissive/gill/glow materials are cloned and driven by the
  * existing Environment.daylight value so the underside wakes up naturally after sunset.
  */

@@ -108,10 +108,12 @@ async function bootstrap(): Promise<void> {
   // grass visibility instead of submitting a carpet for the entire terrain ring.
   const fineVegetationDistance = Math.max(
     36,
-    Math.min(125, detailRenderDistance * 0.38),
+    Math.min(100, detailRenderDistance * 0.38),
   );
 
-  const riverRocks = new RiverRockSystem(game.scene);
+  const riverRocks = new RiverRockSystem(game.scene, {
+    renderDistance: detailRenderDistance,
+  });
   game.content.register(riverRocks);
   settings.setStatus(`${BUILD_TAG} · loading PBR river rocks`);
   await riverRocks.ready;

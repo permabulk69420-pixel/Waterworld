@@ -1,6 +1,7 @@
 import {
   Box3,
   DynamicDrawUsage,
+  Float32BufferAttribute,
   InstancedBufferAttribute,
   InstancedMesh,
   MathUtils,
@@ -34,8 +35,9 @@ const BIOME_EDGE_HALF_EXTENT = DEFAULT_WORLD_CONFIG.chunkSize * BASE_HALF_CHUNKS
 const FOREST_BAND_WIDTH = 29;
 const FOREST_INNER_HALF_EXTENT = BIOME_EDGE_HALF_EXTENT - FOREST_BAND_WIDTH;
 
-// Dense enough to read as a wall rather than scatter vegetation. The patches are
-// low-poly and instanced; only the subset close to the player is submitted.
+// Dense enough to read as a wall rather than scatter vegetation. The source assets
+// recommend 1.7-3.4 m patch spacing; this sits near the dense end while still leaving
+// irregular little channels a player can physically push through.
 const GRID_SPACING = 2.85;
 const JITTER = 1.05;
 const CELL_OCCUPANCY = 0.91;
@@ -79,15 +81,15 @@ interface KelpVariant {
 /**
  * Dense ribbon-kelp transition forest around the current Safe Shallows edge.
  *
- * Every source GLB mesh becomes an InstancedMesh layer, so even if an asset uses a
- * couple of material/mesh parts we still pay only a handful of draw calls for the
- * entire visible forest. Source mesh transforms are baked into cloned geometry;
- * each runtime instance is then just one matrix + one phase float.
+ * Every source GLB mesh becomes an InstancedMesh layer, so even if a future asset
+ * grows a couple of material/mesh parts we still pay only a handful of draw calls
+ * for the entire visible forest. Source mesh transforms are baked into cloned
+ * geometry; each runtime instance is then just one matrix + one phase float.
  *
- * Sway is vertex-shader driven and weighted from root to tip. No bones, mixers or
- * per-plant CPU animation are used. The instance lists are rebuilt only after the
- * player moves a few metres and standard frustum culling is retained on the compact
- * nearby batches.
+ * Sway is vertex-shader driven using the GLBs' authored _SWAY weights when present,
+ * with a height-derived fallback. No bones, mixers or per-plant CPU animation are
+ * used. Nearby instance lists rebuild only after the player moves a few metres and
+ * ordinary Three.js view-frustum culling stays enabled on those compact batches.
  */
 export class RibbonKelpForestSystem {
   readonly ready: Promise<void>;
@@ -160,6 +162,7 @@ export class RibbonKelpForestSystem {
       geometry.applyMatrix4(_grounding);
       geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
+      this.installSwayWeightAttribute(geometry, authoredHeight);
 
       const indexCount = geometry.index?.count ?? geometry.getAttribute('position')?.count ?? 0;
       triangleCount += Math.floor(indexCount / 3);
@@ -168,7 +171,7 @@ export class RibbonKelpForestSystem {
       const materials = sourceMaterials.map((source, materialIndex) => {
         const material = source.clone();
         if (material instanceof MeshStandardMaterial) {
-          this.installSwayShader(material, authoredHeight, variantIndex, layers.length, materialIndex);
+          this.installSwayShader(material, variantIndex, layers.length, materialIndex);
         }
         return material;
       });
@@ -207,9 +210,27 @@ export class RibbonKelpForestSystem {
     };
   }
 
+  private installSwayWeightAttribute(geometry: BufferGeometry, authoredHeight: number): void {
+    // THREE's GLTFLoader currently preserves custom semantics with their authored
+    // name, but accept either casing so this remains robust if the loader changes.
+    const authored = geometry.getAttribute('_sway') ?? geometry.getAttribute('_SWAY');
+    if (authored) {
+      geometry.setAttribute('kelpSwayWeight', authored);
+      return;
+    }
+
+    const position = geometry.getAttribute('position');
+    const weights = new Float32Array(position.count);
+    const inverseHeight = 1 / Math.max(0.05, authoredHeight);
+    for (let index = 0; index < position.count; index++) {
+      const height01 = MathUtils.clamp(position.getY(index) * inverseHeight, 0, 1);
+      weights[index] = height01 * height01 * (3 - 2 * height01);
+    }
+    geometry.setAttribute('kelpSwayWeight', new Float32BufferAttribute(weights, 1));
+  }
+
   private installSwayShader(
     material: MeshStandardMaterial,
-    authoredHeight: number,
     variantIndex: number,
     layerIndex: number,
     materialIndex: number,
@@ -218,22 +239,21 @@ export class RibbonKelpForestSystem {
       shader.uniforms.uRibbonKelpTime = this.swayTime;
       shader.vertexShader = shader.vertexShader.replace(
         '#include <common>',
-        '#include <common>\nattribute float instanceKelpPhase;\nuniform float uRibbonKelpTime;',
+        '#include <common>\nattribute float instanceKelpPhase;\nattribute float kelpSwayWeight;\nuniform float uRibbonKelpTime;',
       );
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>\n\
-        float kelpHeight01 = clamp(position.y / ${Math.max(0.05, authoredHeight).toFixed(5)}, 0.0, 1.0);\n\
-        float kelpBend = kelpHeight01 * kelpHeight01 * (3.0 - 2.0 * kelpHeight01);\n\
-        float kelpPhase = uRibbonKelpTime * 0.72 + instanceKelpPhase;\n\
+        float kelpBend = clamp(kelpSwayWeight, 0.0, 1.0);\n\
+        float kelpPhase = uRibbonKelpTime * 1.0 + instanceKelpPhase;\n\
         float kelpBroadWave = sin(kelpPhase + position.y * 0.42);\n\
         float kelpFineWave = sin(kelpPhase * 1.37 + position.y * 0.91 + position.x * 0.22);\n\
-        transformed.x += (kelpBroadWave * 0.18 + kelpFineWave * 0.055) * kelpBend;\n\
+        transformed.x += (kelpBroadWave * 0.19 + kelpFineWave * 0.055) * kelpBend;\n\
         transformed.z += cos(kelpPhase * 0.83 + position.y * 0.36) * 0.13 * kelpBend;`,
       );
     };
     material.customProgramCacheKey = () =>
-      `waterworld-ribbon-kelp-sway-v1-${variantIndex}-${layerIndex}-${materialIndex}`;
+      `waterworld-ribbon-kelp-sway-v2-${variantIndex}-${layerIndex}-${materialIndex}`;
     material.needsUpdate = true;
   }
 
@@ -274,12 +294,15 @@ export class RibbonKelpForestSystem {
         const requestedHeight = rng.range(MIN_TARGET_HEIGHT, MAX_TARGET_HEIGHT);
         const height = Math.min(requestedHeight, Math.max(2.8, depth - SURFACE_CLEARANCE));
         const heightScale = height / variant.authoredHeight;
-        const widthScale = heightScale * rng.range(0.82, 1.12);
+        // Stretch mostly upward. The source patches are already 2.4-3 m across and
+        // authored for dense 1.7-3.4 m spacing, so doubling their width would turn
+        // the forest into overlapping geometry soup instead of taller ribbons.
+        const horizontalScale = rng.range(0.86, 1.16);
 
         this.dummy.position.set(x, seabed - BASE_SINK, z);
         this.dummy.quaternion.setFromUnitVectors(UP, _normal);
         this.dummy.rotateY(rng.range(0, Math.PI * 2));
-        this.dummy.scale.set(widthScale, heightScale, widthScale);
+        this.dummy.scale.set(horizontalScale, heightScale, horizontalScale);
         this.dummy.updateMatrix();
 
         variant.placements.push({

@@ -21,6 +21,10 @@ interface FaunaCullEntry {
  * visibility. The fauna system keeps full ownership of the creature root's own
  * `visible` state, so a pooled/dead fish can never be accidentally resurrected
  * when the player swims back inside the distance threshold.
+ *
+ * VR interactions may temporarily reparent fauna into a controller/hand. Those
+ * objects are deliberately ignored while externally parented, then automatically
+ * re-wrapped when interaction code releases them back to the scene.
  */
 export class FaunaDistanceCuller {
   private readonly entries: FaunaCullEntry[] = [];
@@ -71,10 +75,22 @@ export class FaunaDistanceCuller {
 
   private ensureWrapper(root: Object3D): Group | null {
     const existing = this.wrappers.get(root);
-    if (existing) return existing;
+    if (existing) {
+      if (root.parent === existing) return existing;
+
+      // A hand/tool interaction may have attached the creature elsewhere. Never
+      // yank it out of that owner. PrismFishGrabSystem releases back to Scene, at
+      // which point the next rescan safely restores the distance wrapper.
+      if (root.parent !== this.scene) return null;
+
+      existing.visible = true;
+      this.scene.add(existing);
+      existing.attach(root);
+      return existing;
+    }
 
     const parent = root.parent;
-    if (!parent) return null;
+    if (!parent || parent !== this.scene) return null;
 
     const wrapper = new Group();
     wrapper.name = `distance-cull:${root.name}`;

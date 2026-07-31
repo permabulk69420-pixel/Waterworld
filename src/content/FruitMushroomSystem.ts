@@ -23,8 +23,9 @@ const MAX_HEIGHT = 20;
 const SURFACE_HEADROOM = 0.8;
 const START_AREA_CLEAR_RADIUS = 20;
 const START_AREA_CLEAR_RADIUS_SQ = START_AREA_CLEAR_RADIUS * START_AREA_CLEAR_RADIUS;
-const RENDER_DISTANCE = 190;
-const RENDER_DISTANCE_SQ = RENDER_DISTANCE * RENDER_DISTANCE;
+const DEFAULT_RENDER_DISTANCE = 190;
+const MIN_RENDER_DISTANCE = 100;
+const MAX_RENDER_DISTANCE = 420;
 
 const FRUIT_NAME_HINT = /fruit|berry|pod|harvest|edible/i;
 const BASE_FRUIT_GRAB_RADIUS = 0.24;
@@ -35,6 +36,11 @@ const GRIP_THRESHOLD = 0.45;
 // exposes these cleanly for that future system without pretending one already exists.
 const FOOD_PER_FRUIT = 8;
 const WATER_PER_FRUIT = 12;
+
+export interface FruitMushroomOptions {
+  /** Visibility range for these large interactive flora. */
+  renderDistance?: number;
+}
 
 interface FruitRuntime {
   id: string;
@@ -86,6 +92,7 @@ export class FruitMushroomSystem implements ContentPopulator {
     left: null,
     right: null,
   };
+  private readonly renderDistanceSq: number;
 
   private template: Group | null = null;
   private authoredHeight = 1;
@@ -97,7 +104,13 @@ export class FruitMushroomSystem implements ContentPopulator {
     private readonly renderer: WebGLRenderer,
     private readonly hands: VRHands,
     private readonly mode: 'story' | 'build',
+    options: FruitMushroomOptions = {},
   ) {
+    const renderDistance = Math.max(
+      MIN_RENDER_DISTANCE,
+      Math.min(MAX_RENDER_DISTANCE, options.renderDistance ?? DEFAULT_RENDER_DISTANCE),
+    );
+    this.renderDistanceSq = renderDistance * renderDistance;
     this.ready = this.load();
   }
 
@@ -276,7 +289,7 @@ export class FruitMushroomSystem implements ContentPopulator {
       for (const placement of placements) {
         const dx = placement.position.x - playerPosition.x;
         const dz = placement.position.z - playerPosition.z;
-        placement.root.visible = dx * dx + dz * dz <= RENDER_DISTANCE_SQ;
+        placement.root.visible = dx * dx + dz * dz <= this.renderDistanceSq;
 
         if (this.mode !== 'story') continue;
         for (const fruit of placement.fruits) {

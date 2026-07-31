@@ -274,10 +274,6 @@ async function bootstrap(): Promise<void> {
     );
 
     headlamp = new Headlamp(game.scene, game.renderer, game.rig, hands);
-    // Give the current test lamp roughly 30% more practical reach without changing
-    // beam width or battery behaviour.
-    headlamp.light.distance *= 1.3;
-    headlamp.light.intensity *= 1.3;
 
     thrusters = new HandThrusters(
       game.renderer,

@@ -58,6 +58,8 @@
       }
       #boot-settings {
         width: min(380px, 86vw);
+        max-height: min(88vh, 680px);
+        overflow-y: auto;
         padding: 16px 18px 18px;
         border: 1px solid rgba(130, 215, 230, 0.18);
         border-radius: 8px;
@@ -224,34 +226,45 @@
 
         <div class="boot-setting">
           <div class="boot-setting-header">
-            <span>Terrain load distance</span>
-            <span id="view-distance-value" class="boot-setting-value">3 chunks · ~192 m radius</span>
+            <span>Terrain distance</span>
+            <span id="view-distance-value" class="boot-setting-value">4 chunks · ~256 m radius</span>
           </div>
-          <input class="boot-slider" id="view-distance" type="range" min="2" max="8" step="1" value="3" />
+          <input class="boot-slider" id="view-distance" type="range" min="2" max="8" step="1" value="4" />
           <div class="boot-setting-note">
-            How far terrain chunks stay loaded. Terrain can remain much farther away than small vegetation.
+            How far terrain chunks stay loaded. This is the expensive world-geometry budget and also limits chunked content outside it.
           </div>
         </div>
 
         <div class="boot-setting">
           <div class="boot-setting-header">
-            <span>Grass density</span>
+            <span>Detail distance</span>
+            <span id="detail-distance-value" class="boot-setting-value">240 m</span>
+          </div>
+          <input class="boot-slider" id="detail-distance" type="range" min="80" max="360" step="10" value="240" />
+          <div class="boot-setting-note">
+            Rocks, kelp, plants, resources and ordinary props. Very dense micro-vegetation automatically uses a shorter fraction of this range.
+          </div>
+        </div>
+
+        <div class="boot-setting">
+          <div class="boot-setting-header">
+            <span>Fauna distance</span>
+            <span id="fauna-distance-value" class="boot-setting-value">85 m</span>
+          </div>
+          <input class="boot-slider" id="fauna-distance" type="range" min="40" max="120" step="5" value="85" />
+          <div class="boot-setting-note">
+            Normal fish/creature visibility budget. Tiny seabed creatures cull sooner; large predators scale farther. Sky fauna and major landmarks stay visible much farther away.
+          </div>
+        </div>
+
+        <div class="boot-setting">
+          <div class="boot-setting-header">
+            <span>Vegetation density</span>
             <span id="grass-density-value" class="boot-setting-value">100%</span>
           </div>
           <input class="boot-slider" id="grass-density" type="range" min="0" max="400" step="10" value="100" />
           <div class="boot-setting-note">
-            100% is the current test density. Try 0–400% to find the visual/performance sweet spot.
-          </div>
-        </div>
-
-        <div class="boot-setting">
-          <div class="boot-setting-header">
-            <span>Grass render distance</span>
-            <span id="grass-distance-value" class="boot-setting-value">46 m</span>
-          </div>
-          <input class="boot-slider" id="grass-distance" type="range" min="10" max="100" step="2" value="46" />
-          <div class="boot-setting-note">
-            Grass meshes only exist near you; terrain still uses the separate load-distance setting above.
+            Density of the very common shallow vegetation. Distance is now derived from the shared detail budget above.
           </div>
         </div>
 

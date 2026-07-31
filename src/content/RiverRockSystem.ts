@@ -2,6 +2,7 @@ import {
   CanvasTexture,
   DynamicDrawUsage,
   InstancedMesh,
+  MathUtils,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
@@ -30,13 +31,19 @@ const METALLIC_URL = `${TEXTURE_ROOT}/wet-mossy-rocks_metallic.png`;
 // 1K version of any one rock map to the Quest GPU. If the source is already 1K
 // (or smaller) this leaves it alone.
 const MAX_TEXTURE_EDGE = 1024;
-const MAX_VISIBLE_INSTANCES = 512;
-const RENDER_DISTANCE = 118;
-const RENDER_DISTANCE_SQ = RENDER_DISTANCE * RENDER_DISTANCE;
+const MAX_VISIBLE_INSTANCES = 2048;
+const DEFAULT_RENDER_DISTANCE = 118;
+const MIN_RENDER_DISTANCE = 60;
+const MAX_RENDER_DISTANCE = 360;
 const CULL_REBUILD_DISTANCE = 3;
 const CULL_REBUILD_DISTANCE_SQ = CULL_REBUILD_DISTANCE * CULL_REBUILD_DISTANCE;
 const START_AREA_CLEAR_RADIUS = 18;
 const START_AREA_CLEAR_RADIUS_SQ = START_AREA_CLEAR_RADIUS * START_AREA_CLEAR_RADIUS;
+
+export interface RiverRockOptions {
+  /** Distance in metres at which boulder instances are submitted to the GPU. */
+  renderDistance?: number;
+}
 
 interface RockPlacement {
   position: Vector3;
@@ -61,6 +68,7 @@ export class RiverRockSystem implements ContentPopulator {
   private readonly chunks = new Map<string, RockPlacement[]>();
   private readonly dummy = new Object3D();
   private readonly lastCullPosition = new Vector3(Number.POSITIVE_INFINITY, 0, 0);
+  private readonly renderDistanceSq: number;
 
   private geometry: BufferGeometry | null = null;
   private material: MeshStandardMaterial | null = null;
@@ -69,8 +77,14 @@ export class RiverRockSystem implements ContentPopulator {
   private loadFailed = false;
   private warnedCapacity = false;
 
-  constructor(parent: Object3D) {
+  constructor(parent: Object3D, options: RiverRockOptions = {}) {
     this.parent = parent;
+    const renderDistance = MathUtils.clamp(
+      options.renderDistance ?? DEFAULT_RENDER_DISTANCE,
+      MIN_RENDER_DISTANCE,
+      MAX_RENDER_DISTANCE,
+    );
+    this.renderDistanceSq = renderDistance * renderDistance;
     this.ready = this.load();
   }
 
@@ -212,7 +226,7 @@ export class RiverRockSystem implements ContentPopulator {
       for (const placement of placements) {
         const dx = placement.position.x - playerPosition.x;
         const dz = placement.position.z - playerPosition.z;
-        if (dx * dx + dz * dz > RENDER_DISTANCE_SQ) continue;
+        if (dx * dx + dz * dz > this.renderDistanceSq) continue;
 
         if (visible >= MAX_VISIBLE_INSTANCES) {
           if (!this.warnedCapacity) {

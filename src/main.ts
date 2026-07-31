@@ -26,7 +26,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V28-RIBBON-KELP-BORDER';
+const BUILD_TAG = 'BUILD-MODE-V28-RIBBON-KELP-EDGE-FOREST';
 
 /**
  * Bootstrap.
@@ -99,12 +99,9 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · loading shallow vegetation`);
   await seaGrass.ready;
 
-  const ribbonKelp = new RibbonKelpForestSystem(
-    game.scene,
-    game.density,
-    game.worldConfig,
-  );
-  settings.setStatus(`${BUILD_TAG} · growing dense ribbon-kelp biome border`);
+  const ribbonKelp = new RibbonKelpForestSystem(game.worldConfig, game.collision);
+  game.content.register(ribbonKelp);
+  settings.setStatus(`${BUILD_TAG} · growing ribbon-kelp boundary forest`);
   await ribbonKelp.ready;
 
   const giantMushrooms = new GiantMushroomSystem(game.scene);
@@ -278,7 +275,6 @@ async function bootstrap(): Promise<void> {
     // Spawned motors used to be unlit MeshBasicMaterial. Convert each new pickup
     // once so it now darkens naturally with the rest of the underwater scene.
     thrusterLighting?.update();
-    ribbonKelp.update(dt, game.rig.position);
     liftBladders.update(dt, elapsed);
     prismFish.update(dt, elapsed);
     prismFishGrab.update();

@@ -6,6 +6,7 @@ import { AlienFishSystem } from './content/AlienFishSystem.ts';
 import { ColossusMushroomSystem } from './content/ColossusMushroomSystem.ts';
 import { FruitMushroomSystem } from './content/FruitMushroomSystem.ts';
 import { GiantMushroomSystem } from './content/GiantMushroomSystem.ts';
+import { LiftBladderPlantSystem } from './content/LiftBladderPlantSystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
 import { PrismFishGrabSystem } from './content/PrismFishGrabSystem.ts';
@@ -23,7 +24,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V25-GRABBABLE-PRISM-FISH';
+const BUILD_TAG = 'BUILD-MODE-V26-LIFT-BLADDER';
 
 /**
  * Bootstrap.
@@ -154,6 +155,20 @@ async function bootstrap(): Promise<void> {
   settings.setStatus(`${BUILD_TAG} · loading VR hands`);
   await hands.ready;
 
+  const liftBladders = new LiftBladderPlantSystem(
+    game.scene,
+    game.renderer,
+    hands,
+    game.rig,
+    game.locomotion,
+    game.density,
+    game.biomes,
+    game.worldConfig,
+    mode === 'story',
+  );
+  settings.setStatus(`${BUILD_TAG} · loading rare lift bladder plants`);
+  await liftBladders.ready;
+
   const prismFishGrab = new PrismFishGrabSystem(game.renderer, hands, game.scene, prismFish);
 
   const fruitMushrooms = new FruitMushroomSystem(
@@ -243,6 +258,7 @@ async function bootstrap(): Promise<void> {
     // Spawned motors used to be unlit MeshBasicMaterial. Convert each new pickup
     // once so it now darkens naturally with the rest of the underwater scene.
     thrusterLighting?.update();
+    liftBladders.update(dt, elapsed);
     prismFish.update(dt, elapsed);
     prismFishGrab.update();
     alienFish.update(dt, elapsed);
@@ -296,6 +312,7 @@ async function bootstrap(): Promise<void> {
   }).plankton = plankton;
   (window as unknown as { snapBulbs: SnapBulbSystem }).snapBulbs = snapBulbs;
   (window as unknown as { fruitMushrooms: FruitMushroomSystem }).fruitMushrooms = fruitMushrooms;
+  (window as unknown as { liftBladders: LiftBladderPlantSystem }).liftBladders = liftBladders;
   (window as unknown as { speargun: SpeargunSystem | null }).speargun = speargun;
   (window as unknown as { riftmaw: RiftmawHunterSystem }).riftmaw = riftmawHunter;
 
@@ -307,12 +324,12 @@ async function bootstrap(): Promise<void> {
   if (mode === 'build') {
     hint.textContent = 'BUILD · right-hand laser aims · right trigger selects · right grip grabs pointed prop · left trigger menu · A/X up · B/Y down';
   } else {
-    hint.textContent = 'STORY · right grip picks up speargun · right trigger fires · grip nearby prism fish to catch/release · grip hanging mushroom fruit to harvest · tap head to toggle lamp';
+    hint.textContent = 'STORY · grip a mature lift bladder to tear it free and rise · release grip to let go · right grip also picks up nearby tools/fish · tap head to toggle lamp';
   }
 
   boot.classList.add('hidden');
   setTimeout(() => boot.remove(), 800);
-  setTimeout(() => hint.classList.add('faded'), mode === 'build' ? 16000 : 9000);
+  setTimeout(() => hint.classList.add('faded'), mode === 'build' ? 16000 : 11000);
 }
 
 bootstrap().catch((error: unknown) => {

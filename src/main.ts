@@ -11,6 +11,7 @@ import { LumenveilSkyJellySystem } from './content/LumenveilSkyJellySystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
 import { PrismFishGrabSystem } from './content/PrismFishGrabSystem.ts';
+import { RibbonKelpForestSystem } from './content/RibbonKelpForestSystem.ts';
 import { RiftmawHunterSystem } from './content/RiftmawHunterSystem.ts';
 import { RiverRockSystem } from './content/RiverRockSystem.ts';
 import { SeaGrassSystem } from './content/SeaGrassSystem.ts';
@@ -25,7 +26,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V27-LUMENVEIL-SKY-JELLY';
+const BUILD_TAG = 'BUILD-MODE-V28-RIBBON-KELP-BORDER';
 
 /**
  * Bootstrap.
@@ -97,6 +98,14 @@ async function bootstrap(): Promise<void> {
   game.content.register(seaGrass);
   settings.setStatus(`${BUILD_TAG} · loading shallow vegetation`);
   await seaGrass.ready;
+
+  const ribbonKelp = new RibbonKelpForestSystem(
+    game.scene,
+    game.density,
+    game.worldConfig,
+  );
+  settings.setStatus(`${BUILD_TAG} · growing dense ribbon-kelp biome border`);
+  await ribbonKelp.ready;
 
   const giantMushrooms = new GiantMushroomSystem(game.scene);
   game.content.register(giantMushrooms);
@@ -269,6 +278,7 @@ async function bootstrap(): Promise<void> {
     // Spawned motors used to be unlit MeshBasicMaterial. Convert each new pickup
     // once so it now darkens naturally with the rest of the underwater scene.
     thrusterLighting?.update();
+    ribbonKelp.update(dt, game.rig.position);
     liftBladders.update(dt, elapsed);
     prismFish.update(dt, elapsed);
     prismFishGrab.update();
@@ -325,6 +335,7 @@ async function bootstrap(): Promise<void> {
   (window as unknown as { snapBulbs: SnapBulbSystem }).snapBulbs = snapBulbs;
   (window as unknown as { fruitMushrooms: FruitMushroomSystem }).fruitMushrooms = fruitMushrooms;
   (window as unknown as { liftBladders: LiftBladderPlantSystem }).liftBladders = liftBladders;
+  (window as unknown as { ribbonKelp: RibbonKelpForestSystem }).ribbonKelp = ribbonKelp;
   (window as unknown as { lumenveil: LumenveilSkyJellySystem }).lumenveil = lumenveil;
   (window as unknown as { speargun: SpeargunSystem | null }).speargun = speargun;
   (window as unknown as { riftmaw: RiftmawHunterSystem }).riftmaw = riftmawHunter;

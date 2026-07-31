@@ -39,9 +39,15 @@ const CYCLE_SECONDS = 60;
 const REGROW_HIDDEN_SECONDS = 3;
 const REGROW_SECONDS = 12;
 const READY_GROWTH = 0.92;
-const GRAB_RADIUS = 0.55;
+
+// Grabbing is now measured from the actual outer bladder surface rather than its
+// centre/authored helper. The hand must really reach the membrane to catch it.
+const GRAB_RADIUS = 0.38;
 const GRAB_RADIUS_SQ = GRAB_RADIUS * GRAB_RADIUS;
+const TETHER_BREAK_DISTANCE = 0.42;
+const TETHER_BREAK_DISTANCE_SQ = TETHER_BREAK_DISTANCE * TETHER_BREAK_DISTANCE;
 const GRIP_THRESHOLD = 0.45;
+
 const PLANT_RENDER_DISTANCE = 155;
 const PLANT_RENDER_DISTANCE_SQ = PLANT_RENDER_DISTANCE * PLANT_RENDER_DISTANCE;
 const FREE_BLADDER_LIFETIME = 300;
@@ -56,6 +62,12 @@ const _sourceGrabPosition = new Vector3();
 const _localGrabPosition = new Vector3();
 const _sourceGrabQuaternion = new Quaternion();
 const _localGrabQuaternion = new Quaternion();
+const _rigDelta = new Vector3();
+const _anchorWorld = new Vector3();
+const _boundsCenter = new Vector3();
+const _halfExtents = new Vector3();
+const _scaledDirection = new Vector3();
+const _bladderBounds = new Box3();
 
 interface PlantState {
   root: Group;
@@ -72,6 +84,8 @@ interface FreeBladder {
   age: number;
   phase: number;
   heldBy: Handedness | null;
+  holdAnchorLocal: Vector3;
+  reservation: Group | null;
 }
 
 function smooth01(value: number): number {
@@ -101,11 +115,11 @@ function findGrabPoint(bladder: Object3D): Object3D {
 /**
  * Rare biological lift-bladder plants plus their detached balloon behaviour.
  *
- * The supplied GLB is authored specifically for runtime detachment: LiftBladder
- * contains its membrane, grip lobe, vein network, GrabPoint_Bladder and collision
- * metadata. The rooted plant keeps its authored bladder hidden after release while
- * a cheap clone becomes the independent world balloon; that lets the same plant
- * regrow forever without duplicating or rebuilding the whole GLB.
+ * The supplied GLB is authored specifically for runtime detachment. Grabbing is
+ * intentionally NOT implemented as a normal held weapon/tool: the bladder remains
+ * a world-space buoyant object and the hand merely latches to a point on its outer
+ * membrane. Player-rig motion carries the tethered bladder along, but waving or
+ * rotating the controller cannot swing the entire balloon around.
  */
 export class LiftBladderPlantSystem {
   readonly ready: Promise<void>;
@@ -118,6 +132,8 @@ export class LiftBladderPlantSystem {
     left: null,
     right: null,
   };
+  private readonly previousRigPosition = new Vector3();
+  private havePreviousRigPosition = false;
   private serial = 0;
   private disposed = false;
 
@@ -245,10 +261,22 @@ export class LiftBladderPlantSystem {
     dt = Math.min(Math.max(dt, 0), 0.05);
     this.rig.getHeadPosition(_playerPosition);
 
+    // PlayerRig.position is the artificial locomotion transform, not the user's
+    // room-scale controller motion. Following this delta therefore lets the balloon
+    // travel with the lifted player while still ignoring wrist/arm waving.
+    if (!this.havePreviousRigPosition) {
+      this.previousRigPosition.copy(this.rig.position);
+      _rigDelta.set(0, 0, 0);
+      this.havePreviousRigPosition = true;
+    } else {
+      _rigDelta.subVectors(this.rig.position, this.previousRigPosition);
+      this.previousRigPosition.copy(this.rig.position);
+    }
+
     this.updatePlants(dt);
+    this.updateFreeBladders(dt, elapsed);
     this.updateHeld('left');
     this.updateHeld('right');
-    this.updateFreeBladders(dt, elapsed);
 
     if (this.interactionEnabled && this.renderer.xr.isPresenting) {
       if (!this.heldByHand.left && this.gripHeld('left')) this.tryGrabNearest('left');
@@ -312,9 +340,8 @@ export class LiftBladderPlantSystem {
   private detachPlantBladder(plant: PlantState): FreeBladder | null {
     if (!plant.growthWrapper.visible) return null;
 
-    // Use the authored grab helper as the independent balloon's origin. That makes
-    // world pickup and held placement use the exact same point and eliminates the
-    // ugly centre-of-sphere snap that generic Object3D.attach would cause.
+    // The authored helper is still useful for reconstructing the detached visual's
+    // exact world pose, but gameplay grabbing no longer uses this point.
     plant.grabPoint.updateWorldMatrix(true, false);
     plant.grabPoint.getWorldPosition(_sourceGrabPosition);
     plant.grabPoint.getWorldQuaternion(_sourceGrabQuaternion);
@@ -332,9 +359,6 @@ export class LiftBladderPlantSystem {
     visualGrab.getWorldPosition(_localGrabPosition);
     visualGrab.getWorldQuaternion(_localGrabQuaternion);
 
-    // Rotate/translate the visual so GrabPoint_Bladder becomes local origin with
-    // identity orientation. Parenting the resulting root to a palm then behaves
-    // exactly like a one-hand weapon/tool socket.
     visual.quaternion.copy(_localGrabQuaternion).invert();
     visual.position
       .copy(_localGrabPosition)
@@ -353,6 +377,8 @@ export class LiftBladderPlantSystem {
       age: 0,
       phase: this.serial * 1.731 + plant.index * 0.91,
       heldBy: null,
+      holdAnchorLocal: new Vector3(),
+      reservation: null,
     };
     this.serial++;
     this.freeBladders.push(free);
@@ -363,10 +389,66 @@ export class LiftBladderPlantSystem {
     return free;
   }
 
+  /**
+   * Approximates the bladder as the ellipsoid formed by its rendered world bounds
+   * and returns the membrane point in the direction of the hand. This is much more
+   * convincing in VR than treating the centre or an internal helper as grabbable.
+   */
+  private surfacePointFor(bladder: Object3D, handWorld: Vector3, target: Vector3): Vector3 {
+    bladder.updateWorldMatrix(true, true);
+    _bladderBounds.setFromObject(bladder);
+    _bladderBounds.getCenter(_boundsCenter);
+    _bladderBounds.getSize(_halfExtents).multiplyScalar(0.5);
+
+    const hx = Math.max(0.05, _halfExtents.x);
+    const hy = Math.max(0.05, _halfExtents.y);
+    const hz = Math.max(0.05, _halfExtents.z);
+    _scaledDirection.subVectors(handWorld, _boundsCenter);
+
+    let nx = _scaledDirection.x / hx;
+    let ny = _scaledDirection.y / hy;
+    let nz = _scaledDirection.z / hz;
+    let length = Math.hypot(nx, ny, nz);
+    if (length < 1e-5) {
+      nx = 0;
+      ny = -1;
+      nz = 0;
+      length = 1;
+    }
+
+    const invLength = 1 / length;
+    target.set(
+      _boundsCenter.x + nx * invLength * hx,
+      _boundsCenter.y + ny * invLength * hy,
+      _boundsCenter.z + nz * invLength * hz,
+    );
+    return target;
+  }
+
   private updateHeld(handedness: Handedness): void {
     const held = this.heldByHand[handedness];
     if (!held) return;
     if (!this.renderer.xr.isPresenting || !this.gripHeld(handedness)) {
+      this.release(handedness);
+      return;
+    }
+
+    const objectGrip = this.hands.getObjectGrip(handedness);
+    if (!objectGrip) {
+      this.release(handedness);
+      return;
+    }
+
+    objectGrip.updateWorldMatrix(true, false);
+    objectGrip.getWorldPosition(_handPosition);
+    held.root.updateWorldMatrix(true, false);
+    _anchorWorld.copy(held.holdAnchorLocal);
+    held.root.localToWorld(_anchorWorld);
+
+    // We cannot physically stop the user's real arm, so the VR equivalent is a
+    // short tether: the balloon does not follow the hand, and moving the hand too
+    // far away naturally lets go rather than turning the bladder into a weapon.
+    if (_handPosition.distanceToSquared(_anchorWorld) > TETHER_BREAK_DISTANCE_SQ) {
       this.release(handedness);
     }
   }
@@ -384,8 +466,7 @@ export class LiftBladderPlantSystem {
 
     for (const bladder of this.freeBladders) {
       if (bladder.heldBy) continue;
-      bladder.root.updateWorldMatrix(true, false);
-      bladder.root.getWorldPosition(_candidatePosition);
+      this.surfacePointFor(bladder.root, _handPosition, _candidatePosition);
       const distanceSq = _handPosition.distanceToSquared(_candidatePosition);
       if (distanceSq > bestDistanceSq) continue;
       bestDistanceSq = distanceSq;
@@ -395,8 +476,7 @@ export class LiftBladderPlantSystem {
 
     for (const plant of this.plants) {
       if (!plant.root.visible || this.growthFraction(plant) < READY_GROWTH) continue;
-      plant.grabPoint.updateWorldMatrix(true, false);
-      plant.grabPoint.getWorldPosition(_candidatePosition);
+      this.surfacePointFor(plant.bladder, _handPosition, _candidatePosition);
       const distanceSq = _handPosition.distanceToSquared(_candidatePosition);
       if (distanceSq > bestDistanceSq) continue;
       bestDistanceSq = distanceSq;
@@ -412,10 +492,19 @@ export class LiftBladderPlantSystem {
   private grab(bladder: FreeBladder, handedness: Handedness, objectGrip: Group): void {
     if (bladder.heldBy) return;
 
-    objectGrip.add(bladder.root);
-    bladder.root.position.set(0, 0, 0);
-    bladder.root.quaternion.identity();
-    bladder.root.scale.set(1, 1, 1);
+    // Store the exact outer membrane point nearest the player's palm. The bladder
+    // itself stays parented to the world; only this invisible reservation marker is
+    // parented to the hand so other grab systems know that hand is occupied.
+    this.surfacePointFor(bladder.root, _handPosition, _candidatePosition);
+    bladder.root.updateWorldMatrix(true, false);
+    bladder.holdAnchorLocal.copy(_candidatePosition);
+    bladder.root.worldToLocal(bladder.holdAnchorLocal);
+
+    const reservation = new Group();
+    reservation.name = `held-lift-bladder-reservation:${handedness}`;
+    objectGrip.add(reservation);
+
+    bladder.reservation = reservation;
     bladder.heldBy = handedness;
     this.heldByHand[handedness] = bladder;
   }
@@ -424,8 +513,8 @@ export class LiftBladderPlantSystem {
     const bladder = this.heldByHand[handedness];
     if (!bladder) return;
 
-    bladder.root.updateWorldMatrix(true, false);
-    this.scene.attach(bladder.root);
+    bladder.reservation?.removeFromParent();
+    bladder.reservation = null;
     bladder.heldBy = null;
     this.heldByHand[handedness] = null;
   }
@@ -434,7 +523,13 @@ export class LiftBladderPlantSystem {
     for (let index = this.freeBladders.length - 1; index >= 0; index--) {
       const bladder = this.freeBladders[index];
       bladder.age += dt;
-      if (bladder.heldBy) continue;
+
+      if (bladder.heldBy) {
+        // Follow only artificial player locomotion. Controller rotation and local
+        // arm movement have zero authority over the balloon transform.
+        bladder.root.position.add(_rigDelta);
+        continue;
+      }
 
       const underwater = bladder.root.position.y < this.worldConfig.seaLevel + 0.15;
       const riseSpeed = underwater ? WATER_RISE_SPEED : AIR_RISE_SPEED;
@@ -471,7 +566,10 @@ export class LiftBladderPlantSystem {
       plant.mixer.stopAllAction();
       plant.root.removeFromParent();
     }
-    for (const bladder of this.freeBladders) bladder.root.removeFromParent();
+    for (const bladder of this.freeBladders) {
+      bladder.reservation?.removeFromParent();
+      bladder.root.removeFromParent();
+    }
     this.plants.length = 0;
     this.freeBladders.length = 0;
     this.heldByHand.left = null;

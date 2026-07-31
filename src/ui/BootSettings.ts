@@ -2,27 +2,34 @@ import type { GameMode } from '../build/BuildSystem.ts';
 
 const VIEW_STORAGE_KEY = 'waterworld:viewDistanceChunks';
 const GRASS_DENSITY_STORAGE_KEY = 'waterworld:grassDensityPercent';
-const GRASS_DISTANCE_STORAGE_KEY = 'waterworld:grassRenderDistance';
+const DETAIL_DISTANCE_STORAGE_KEY = 'waterworld:detailRenderDistance';
+const FAUNA_DISTANCE_STORAGE_KEY = 'waterworld:faunaRenderDistance';
+const LEGACY_GRASS_DISTANCE_STORAGE_KEY = 'waterworld:grassRenderDistance';
 const MODE_STORAGE_KEY = 'waterworld:launchMode';
 
 const MIN_VIEW_DISTANCE = 2;
 const MAX_VIEW_DISTANCE = 8;
-const DEFAULT_VIEW_DISTANCE = 3;
+const DEFAULT_VIEW_DISTANCE = 4;
 const CHUNK_SIZE_METRES = 64;
 
 const MIN_GRASS_DENSITY = 0;
 const MAX_GRASS_DENSITY = 400;
 const DEFAULT_GRASS_DENSITY = 100;
 
-const MIN_GRASS_DISTANCE = 10;
-const MAX_GRASS_DISTANCE = 100;
-const DEFAULT_GRASS_DISTANCE = 46;
+const MIN_DETAIL_DISTANCE = 80;
+const MAX_DETAIL_DISTANCE = 360;
+const DEFAULT_DETAIL_DISTANCE = 240;
+
+const MIN_FAUNA_DISTANCE = 40;
+const MAX_FAUNA_DISTANCE = 120;
+const DEFAULT_FAUNA_DISTANCE = 85;
 
 export interface BootSettingsValue {
   mode: GameMode;
   viewDistanceChunks: number;
   grassDensityPercent: number;
-  grassRenderDistance: number;
+  detailRenderDistance: number;
+  faunaRenderDistance: number;
 }
 
 function clampViewDistance(value: number): number {
@@ -33,8 +40,12 @@ function clampGrassDensity(value: number): number {
   return Math.max(MIN_GRASS_DENSITY, Math.min(MAX_GRASS_DENSITY, Math.round(value / 10) * 10));
 }
 
-function clampGrassDistance(value: number): number {
-  return Math.max(MIN_GRASS_DISTANCE, Math.min(MAX_GRASS_DISTANCE, Math.round(value / 2) * 2));
+function clampDetailDistance(value: number): number {
+  return Math.max(MIN_DETAIL_DISTANCE, Math.min(MAX_DETAIL_DISTANCE, Math.round(value / 10) * 10));
+}
+
+function clampFaunaDistance(value: number): number {
+  return Math.max(MIN_FAUNA_DISTANCE, Math.min(MAX_FAUNA_DISTANCE, Math.round(value / 5) * 5));
 }
 
 function parseMode(value: string | null | undefined): GameMode | null {
@@ -47,6 +58,21 @@ function storedNumber(key: string, clamp: (value: number) => number): number | n
     if (raw === null) return null;
     const value = Number(raw);
     return Number.isFinite(value) ? clamp(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function legacyDetailDistance(): number | null {
+  try {
+    const raw = localStorage.getItem(LEGACY_GRASS_DISTANCE_STORAGE_KEY);
+    if (raw === null) return null;
+    const oldGrassDistance = Number(raw);
+    if (!Number.isFinite(oldGrassDistance)) return null;
+    // The old setting was specifically for tiny grass and commonly sat around
+    // 46 m. Convert it to the broader world-detail scale rather than interpreting
+    // 46 as a new 46 m rock/kelp cutoff.
+    return clampDetailDistance(oldGrassDistance * 5);
   } catch {
     return null;
   }
@@ -91,8 +117,10 @@ export class BootSettings {
   private readonly viewValue = document.getElementById('view-distance-value')!;
   private readonly densitySlider = document.getElementById('grass-density') as HTMLInputElement;
   private readonly densityValue = document.getElementById('grass-density-value')!;
-  private readonly grassDistanceSlider = document.getElementById('grass-distance') as HTMLInputElement;
-  private readonly grassDistanceValue = document.getElementById('grass-distance-value')!;
+  private readonly detailDistanceSlider = document.getElementById('detail-distance') as HTMLInputElement;
+  private readonly detailDistanceValue = document.getElementById('detail-distance-value')!;
+  private readonly faunaDistanceSlider = document.getElementById('fauna-distance') as HTMLInputElement;
+  private readonly faunaDistanceValue = document.getElementById('fauna-distance-value')!;
   private readonly startButton = document.getElementById('boot-start') as HTMLButtonElement;
   private readonly bootBar = document.getElementById('boot-bar')!;
   private readonly status = document.getElementById('boot-status')!;
@@ -102,7 +130,8 @@ export class BootSettings {
   constructor(
     urlViewDistance?: number,
     urlGrassDensity?: number,
-    urlGrassDistance?: number,
+    urlDetailDistance?: number,
+    urlFaunaDistance?: number,
     urlMode?: string | null,
   ) {
     const view = clampViewDistance(
@@ -111,25 +140,36 @@ export class BootSettings {
     const density = clampGrassDensity(
       urlGrassDensity ?? storedNumber(GRASS_DENSITY_STORAGE_KEY, clampGrassDensity) ?? DEFAULT_GRASS_DENSITY,
     );
-    const grassDistance = clampGrassDistance(
-      urlGrassDistance ?? storedNumber(GRASS_DISTANCE_STORAGE_KEY, clampGrassDistance) ?? DEFAULT_GRASS_DISTANCE,
+    const detailDistance = clampDetailDistance(
+      urlDetailDistance ??
+        storedNumber(DETAIL_DISTANCE_STORAGE_KEY, clampDetailDistance) ??
+        legacyDetailDistance() ??
+        DEFAULT_DETAIL_DISTANCE,
+    );
+    const faunaDistance = clampFaunaDistance(
+      urlFaunaDistance ?? storedNumber(FAUNA_DISTANCE_STORAGE_KEY, clampFaunaDistance) ?? DEFAULT_FAUNA_DISTANCE,
     );
 
     this.mode = parseMode(urlMode) ?? storedMode() ?? 'story';
     this.viewSlider.value = String(view);
     this.densitySlider.value = String(density);
-    this.grassDistanceSlider.value = String(grassDistance);
+    this.detailDistanceSlider.value = String(detailDistance);
+    this.faunaDistanceSlider.value = String(faunaDistance);
     this.updateModeButtons();
     this.updateViewLabel(view);
     this.updateDensityLabel(density);
-    this.updateGrassDistanceLabel(grassDistance);
+    this.updateDetailDistanceLabel(detailDistance);
+    this.updateFaunaDistanceLabel(faunaDistance);
 
     this.storyButton.addEventListener('click', () => this.setMode('story'));
     this.buildButton.addEventListener('click', () => this.setMode('build'));
     this.viewSlider.addEventListener('input', () => this.updateViewLabel(this.currentViewDistance()));
     this.densitySlider.addEventListener('input', () => this.updateDensityLabel(this.currentGrassDensity()));
-    this.grassDistanceSlider.addEventListener('input', () =>
-      this.updateGrassDistanceLabel(this.currentGrassDistance()),
+    this.detailDistanceSlider.addEventListener('input', () =>
+      this.updateDetailDistanceLabel(this.currentDetailDistance()),
+    );
+    this.faunaDistanceSlider.addEventListener('input', () =>
+      this.updateFaunaDistanceLabel(this.currentFaunaDistance()),
     );
   }
 
@@ -140,17 +180,25 @@ export class BootSettings {
         () => {
           const viewDistanceChunks = this.currentViewDistance();
           const grassDensityPercent = this.currentGrassDensity();
-          const grassRenderDistance = this.currentGrassDistance();
+          const detailRenderDistance = this.currentDetailDistance();
+          const faunaRenderDistance = this.currentFaunaDistance();
 
           saveMode(this.mode);
           saveNumber(VIEW_STORAGE_KEY, viewDistanceChunks);
           saveNumber(GRASS_DENSITY_STORAGE_KEY, grassDensityPercent);
-          saveNumber(GRASS_DISTANCE_STORAGE_KEY, grassRenderDistance);
+          saveNumber(DETAIL_DISTANCE_STORAGE_KEY, detailRenderDistance);
+          saveNumber(FAUNA_DISTANCE_STORAGE_KEY, faunaRenderDistance);
 
           this.panel.hidden = true;
           this.bootBar.hidden = false;
           this.status.textContent = 'initialising';
-          resolve({ mode: this.mode, viewDistanceChunks, grassDensityPercent, grassRenderDistance });
+          resolve({
+            mode: this.mode,
+            viewDistanceChunks,
+            grassDensityPercent,
+            detailRenderDistance,
+            faunaRenderDistance,
+          });
         },
         { once: true },
       );
@@ -180,8 +228,12 @@ export class BootSettings {
     return clampGrassDensity(Number(this.densitySlider.value));
   }
 
-  private currentGrassDistance(): number {
-    return clampGrassDistance(Number(this.grassDistanceSlider.value));
+  private currentDetailDistance(): number {
+    return clampDetailDistance(Number(this.detailDistanceSlider.value));
+  }
+
+  private currentFaunaDistance(): number {
+    return clampFaunaDistance(Number(this.faunaDistanceSlider.value));
   }
 
   private updateViewLabel(chunks: number): void {
@@ -193,7 +245,11 @@ export class BootSettings {
     this.densityValue.textContent = `${percent}%`;
   }
 
-  private updateGrassDistanceLabel(metres: number): void {
-    this.grassDistanceValue.textContent = `${metres} m`;
+  private updateDetailDistanceLabel(metres: number): void {
+    this.detailDistanceValue.textContent = `${metres} m`;
+  }
+
+  private updateFaunaDistanceLabel(metres: number): void {
+    this.faunaDistanceValue.textContent = `${metres} m`;
   }
 }

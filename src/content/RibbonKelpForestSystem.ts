@@ -15,7 +15,7 @@ import {
   type Scene,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { DEFAULT_WORLD_CONFIG, type WorldConfig } from '../config/worldConfig.ts';
+import type { WorldConfig } from '../config/worldConfig.ts';
 import { Rng, deriveSeed } from '../math/rng.ts';
 import type { DensityField } from '../world/density.ts';
 
@@ -26,14 +26,11 @@ const ASSET_URLS = Object.freeze([
 
 const UP = new Vector3(0, 1, 0);
 
-// The current Safe Shallows is still the only registered biome, so this is an
-// authored transition belt placed just inside the original ~400 m prototype edge.
-// When real neighbouring biome regions arrive this half-extent can be replaced by
-// the registry's actual border distance without changing the renderer.
-const BASE_HALF_CHUNKS = DEFAULT_WORLD_CONFIG.playableBounds?.halfChunksX ?? 3;
-const BIOME_EDGE_HALF_EXTENT = DEFAULT_WORLD_CONFIG.chunkSize * BASE_HALF_CHUNKS - 8;
+// This is an actual map-edge transition forest, not a decorative ring around the
+// centre. The rectangle is derived from the runtime playable chunk bounds so a
+// larger load-distance setting moves the kelp outward with the real world edge.
 const FOREST_BAND_WIDTH = 29;
-const FOREST_INNER_HALF_EXTENT = BIOME_EDGE_HALF_EXTENT - FOREST_BAND_WIDTH;
+const EDGE_INSET = 0.45;
 
 // Dense enough to read as a wall rather than scatter vegetation. The source assets
 // recommend 1.7-3.4 m patch spacing; this sits near the dense end while still leaving
@@ -48,11 +45,14 @@ const MAX_TARGET_HEIGHT = 11.0;
 const SURFACE_CLEARANCE = 0.45;
 const BASE_SINK = 0.06;
 
-const RENDER_DISTANCE = 92;
+// The old 92 m submit radius made the border appear late and exaggerated the sense
+// that it was an isolated ring. 240 m lets the dense wall establish itself as a
+// distant biome boundary while still submitting only a local slice of the forest.
+const RENDER_DISTANCE = 240;
 const RENDER_DISTANCE_SQ = RENDER_DISTANCE * RENDER_DISTANCE;
-const CULL_REBUILD_DISTANCE = 2.75;
+const CULL_REBUILD_DISTANCE = 3.5;
 const CULL_REBUILD_DISTANCE_SQ = CULL_REBUILD_DISTANCE * CULL_REBUILD_DISTANCE;
-const MAX_VISIBLE_PER_VARIANT = 1100;
+const MAX_VISIBLE_PER_VARIANT = 2400;
 
 const _normal = new Vector3();
 const _size = new Vector3();
@@ -79,7 +79,7 @@ interface KelpVariant {
 }
 
 /**
- * Dense ribbon-kelp transition forest around the current Safe Shallows edge.
+ * Dense ribbon-kelp transition forest hugging the current playable-map edge.
  *
  * Every source GLB mesh becomes an InstancedMesh layer, so even if a future asset
  * grows a couple of material/mesh parts we still pay only a handful of draw calls
@@ -129,9 +129,9 @@ export class RibbonKelpForestSystem {
       this.rebuildVisibleInstances(new Vector3(0, 0, 0));
 
       console.info(
-        `[kelp] ribbon forest ready: ${this.placementCount} patches around biome edge; ` +
+        `[kelp] ribbon forest ready: ${this.placementCount} patches on actual map edge; ` +
           `${this.variants.map((variant, index) => `v${index + 1}=${variant.triangleCount} tris/${variant.layers.length} draw layer(s)/${variant.authoredHeight.toFixed(2)}m authored`).join(', ')}; ` +
-          `target ${MIN_TARGET_HEIGHT}-${MAX_TARGET_HEIGHT}m; ${RENDER_DISTANCE}m submit radius`,
+          `band ${FOREST_BAND_WIDTH}m; target ${MIN_TARGET_HEIGHT}-${MAX_TARGET_HEIGHT}m; ${RENDER_DISTANCE}m submit radius`,
       );
     } catch (error) {
       console.warn('[kelp] failed to load ribbon-kelp forest assets', error);
@@ -260,19 +260,42 @@ export class RibbonKelpForestSystem {
   private buildForestPlacements(): void {
     if (this.variants.length === 0) return;
 
-    const rng = new Rng(deriveSeed(this.worldConfig.seed, 'safe-shallows-ribbon-kelp-border-v1'));
-    const edge = BIOME_EDGE_HALF_EXTENT;
-    const start = -edge + GRID_SPACING * 0.5;
-    const end = edge - GRID_SPACING * 0.5;
+    const bounds = this.worldConfig.playableBounds;
+    const halfChunksX = bounds?.halfChunksX ?? 3;
+    const halfChunksZ = bounds?.halfChunksZ ?? 3;
+    const chunkSize = this.worldConfig.chunkSize;
 
-    for (let gz = start; gz <= end; gz += GRID_SPACING) {
-      for (let gx = start; gx <= end; gx += GRID_SPACING) {
+    // Chunk coordinates run from -half..+half inclusive. That means the physical
+    // world footprint is not +/- half*chunkSize: the positive edge includes the
+    // full +half chunk. Derive the exact rectangle used by ChunkManager.
+    const mapMinX = -halfChunksX * chunkSize;
+    const mapMaxX = (halfChunksX + 1) * chunkSize;
+    const mapMinZ = -halfChunksZ * chunkSize;
+    const mapMaxZ = (halfChunksZ + 1) * chunkSize;
+
+    const plantMinX = mapMinX + EDGE_INSET;
+    const plantMaxX = mapMaxX - EDGE_INSET;
+    const plantMinZ = mapMinZ + EDGE_INSET;
+    const plantMaxZ = mapMaxZ - EDGE_INSET;
+
+    const rng = new Rng(deriveSeed(this.worldConfig.seed, 'safe-shallows-ribbon-kelp-border-v2'));
+
+    // Fill only the outer FOREST_BAND_WIDTH metres of the actual runtime map. Using
+    // distance-to-rectangle-edge avoids the previous centred square-radius ring and
+    // guarantees the kelp reaches every side and corner of the playable boundary.
+    for (let gz = plantMinZ; gz <= plantMaxZ; gz += GRID_SPACING) {
+      for (let gx = plantMinX; gx <= plantMaxX; gx += GRID_SPACING) {
         if (!rng.chance(CELL_OCCUPANCY)) continue;
 
-        const x = MathUtils.clamp(gx + rng.range(-JITTER, JITTER), -edge + 0.4, edge - 0.4);
-        const z = MathUtils.clamp(gz + rng.range(-JITTER, JITTER), -edge + 0.4, edge - 0.4);
-        const squareRadius = Math.max(Math.abs(x), Math.abs(z));
-        if (squareRadius < FOREST_INNER_HALF_EXTENT || squareRadius > edge) continue;
+        const x = MathUtils.clamp(gx + rng.range(-JITTER, JITTER), plantMinX, plantMaxX);
+        const z = MathUtils.clamp(gz + rng.range(-JITTER, JITTER), plantMinZ, plantMaxZ);
+        const distanceToMapEdge = Math.min(
+          x - mapMinX,
+          mapMaxX - x,
+          z - mapMinZ,
+          mapMaxZ - z,
+        );
+        if (distanceToMapEdge < 0 || distanceToMapEdge > FOREST_BAND_WIDTH) continue;
 
         const seabed = this.density.seabedAt(x, z);
         const depth = this.worldConfig.seaLevel - seabed;
@@ -294,9 +317,6 @@ export class RibbonKelpForestSystem {
         const requestedHeight = rng.range(MIN_TARGET_HEIGHT, MAX_TARGET_HEIGHT);
         const height = Math.min(requestedHeight, Math.max(2.8, depth - SURFACE_CLEARANCE));
         const heightScale = height / variant.authoredHeight;
-        // Stretch mostly upward. The source patches are already 2.4-3 m across and
-        // authored for dense 1.7-3.4 m spacing, so doubling their width would turn
-        // the forest into overlapping geometry soup instead of taller ribbons.
         const horizontalScale = rng.range(0.86, 1.16);
 
         this.dummy.position.set(x, seabed - BASE_SINK, z);
@@ -355,9 +375,6 @@ export class RibbonKelpForestSystem {
         layer.mesh.count = visible;
         layer.mesh.instanceMatrix.needsUpdate = true;
         layer.phase.needsUpdate = true;
-        // Keep ordinary Three.js view-frustum rejection on top of our much more
-        // important short-distance instance cull. Rebuilding a ~1000-instance
-        // sphere every few metres is cheap compared with drawing the whole ring.
         layer.mesh.computeBoundingSphere();
       }
     }

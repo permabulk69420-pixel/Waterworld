@@ -7,6 +7,7 @@ import { ColossusMushroomSystem } from './content/ColossusMushroomSystem.ts';
 import { FruitMushroomSystem } from './content/FruitMushroomSystem.ts';
 import { GiantMushroomSystem } from './content/GiantMushroomSystem.ts';
 import { LiftBladderPlantSystem } from './content/LiftBladderPlantSystem.ts';
+import { LumenveilSkyJellySystem } from './content/LumenveilSkyJellySystem.ts';
 import { OctopusCrabSystem } from './content/OctopusCrabSystem.ts';
 import { PrismFishSystem } from './content/PrismFishSystem.ts';
 import { PrismFishGrabSystem } from './content/PrismFishGrabSystem.ts';
@@ -24,7 +25,7 @@ import { VRHands } from './player/VRHands.ts';
 import { BootSettings } from './ui/BootSettings.ts';
 import { installShipCollision } from './world/ShipCollisionSystem.ts';
 
-const BUILD_TAG = 'BUILD-MODE-V26-LIFT-BLADDER';
+const BUILD_TAG = 'BUILD-MODE-V27-LUMENVEIL-SKY-JELLY';
 
 /**
  * Bootstrap.
@@ -110,6 +111,16 @@ async function bootstrap(): Promise<void> {
   );
   settings.setStatus(`${BUILD_TAG} · loading colossus mushroom landmark`);
   await colossusMushroom.ready;
+
+  const lumenveil = new LumenveilSkyJellySystem(
+    game.scene,
+    game.environment,
+    game.rig,
+    game.worldConfig,
+    colossusMushroom,
+  );
+  settings.setStatus(`${BUILD_TAG} · loading Lumenveil sky jellies`);
+  await lumenveil.ready;
 
   const riftmawHunter = new RiftmawHunterSystem(
     game.scene,
@@ -262,6 +273,7 @@ async function bootstrap(): Promise<void> {
     prismFish.update(dt, elapsed);
     prismFishGrab.update();
     alienFish.update(dt, elapsed);
+    lumenveil.update(dt, elapsed);
     riftmawHunter.update(dt, elapsed);
     speargun?.update(dt);
     octopusCrabs.update(dt);
@@ -313,6 +325,7 @@ async function bootstrap(): Promise<void> {
   (window as unknown as { snapBulbs: SnapBulbSystem }).snapBulbs = snapBulbs;
   (window as unknown as { fruitMushrooms: FruitMushroomSystem }).fruitMushrooms = fruitMushrooms;
   (window as unknown as { liftBladders: LiftBladderPlantSystem }).liftBladders = liftBladders;
+  (window as unknown as { lumenveil: LumenveilSkyJellySystem }).lumenveil = lumenveil;
   (window as unknown as { speargun: SpeargunSystem | null }).speargun = speargun;
   (window as unknown as { riftmaw: RiftmawHunterSystem }).riftmaw = riftmawHunter;
 

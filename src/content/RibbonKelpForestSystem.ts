@@ -28,7 +28,8 @@ const UP = new Vector3(0, 1, 0);
 const GROWTH_UP = new Vector3();
 
 // The authored patch is only about 5.7 m tall. Shallow kelp stays in the 9-16 m
-// range, but deep-edge specimens increasingly stretch toward the surface.
+// range, but deep-edge specimens increasingly scale toward the surface while
+// preserving the source asset's original proportions in every axis.
 const MIN_TARGET_HEIGHT = 9;
 const MAX_TARGET_HEIGHT = 16;
 const DEEP_HEIGHT_START = 14;
@@ -37,8 +38,8 @@ const DEEP_SURFACE_GAP_MIN = 1.3;
 const DEEP_SURFACE_GAP_MAX = 3.8;
 const MAX_DEEP_TARGET_HEIGHT = 46;
 
-// Deep water uses fewer, larger plants. This prevents a 40 m-tall forest from
-// becoming a solid geometry wall while preserving a dense silhouette in shallows.
+// Deep water uses fewer, genuinely larger plants. Uniform runtime scaling keeps
+// the authored width:height ratio instead of turning giant specimens into poles.
 const DEEP_DENSITY_MULTIPLIER = 0.36;
 const BASE_SINK = 0.18;
 const MAX_BASE_TILT_DEGREES = 12;
@@ -261,11 +262,7 @@ uniform float uRibbonKelpTime;`,
       const requestedHeight = MathUtils.lerp(shallowHeight, nearSurfaceHeight, deepFactor);
       const waterLimitedHeight = Math.max(4.2, point.depth - ctx.rng.range(0.35, 0.9));
       const targetHeight = Math.min(requestedHeight, waterLimitedHeight);
-
-      const horizontalScale = ctx.rng.range(
-        variant === 0 ? 1.05 : 0.92,
-        variant === 0 ? 1.42 : 1.25,
-      );
+      const uniformScale = targetHeight / source.height;
 
       // The holdfast can attach to a sloping seabed, but the organism itself is
       // buoyant/phototropic and should still grow upward. Limit the whole patch to
@@ -290,11 +287,7 @@ uniform float uRibbonKelpTime;`,
       this.dummy.position.y -= BASE_SINK;
       this.dummy.quaternion.setFromUnitVectors(UP, GROWTH_UP);
       this.dummy.rotateY(ctx.rng.range(0, Math.PI * 2));
-      this.dummy.scale.set(
-        horizontalScale * ctx.rng.range(0.9, 1.12),
-        targetHeight / source.height,
-        horizontalScale * ctx.rng.range(0.9, 1.12),
-      );
+      this.dummy.scale.setScalar(uniformScale);
       this.dummy.updateMatrix();
       matricesByVariant[variant].push(this.dummy.matrix.clone());
     }

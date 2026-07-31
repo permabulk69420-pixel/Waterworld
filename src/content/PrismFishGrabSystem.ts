@@ -2,7 +2,6 @@ import {
   Vector3,
   type AnimationAction,
   type Group,
-  type Object3D,
   type Scene,
   type WebGLRenderer,
 } from 'three';
@@ -35,7 +34,6 @@ interface PrismFishRuntime {
 
 interface HeldFish {
   fish: PrismFishInternal;
-  handedness: Handedness;
 }
 
 /**
@@ -132,7 +130,7 @@ export class PrismFishGrabSystem {
     // catches it, so there is no ugly snap to the controller origin.
     objectGrip.attach(fish.root);
     fish.root.visible = true;
-    this.heldByHand[handedness] = { fish, handedness };
+    this.heldByHand[handedness] = { fish };
   }
 
   private release(handedness: Handedness): void {

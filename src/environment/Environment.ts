@@ -124,11 +124,15 @@ export class Environment {
     if (!this.terrainCaustics) this.tryAttachTerrainCaustics();
     this.updateTimeOfDay(elapsed);
     this.terrainCaustics?.update(elapsed);
-    this.terrainCaustics?.setStrength(0.52 * this.daylight);
+    // Keep the scanned terrain readable. Caustics are a lighting detail now, not
+    // a second cyan material painted over the entire seabed.
+    this.terrainCaustics?.setStrength(0.17 * this.daylight);
 
     const surfaceY = this.ocean.heightAt(cameraPosition.x, cameraPosition.z, elapsed);
     this.depth = Math.max(0, surfaceY - cameraPosition.y);
-    this.submergence = smoothstep(surfaceY + 0.22, surfaceY - 0.28, cameraPosition.y);
+    // Blend the air/water volume over a wider band around eye height. The previous
+    // ~0.5 m transition made a visible clarity line when skimming the surface.
+    this.submergence = smoothstep(surfaceY + 0.32, surfaceY - 0.58, cameraPosition.y);
 
     const depthT = saturate(this.depth / this.maxDepth);
     const depthColorT = Math.pow(depthT, 1.45);
@@ -149,12 +153,21 @@ export class Environment {
     const waterDensity =
       this.fogDensityShallow +
       (this.fogDensityDeep - this.fogDensityShallow) * Math.pow(depthT, 1.2);
-    // Daytime shallow water stays a little clearer. At full night also relax the
-    // density slightly: distance should disappear primarily because there is no light,
-    // not because a dense coloured fog curtain blocks the view.
-    const shallowDayClarity = this.submergence * this.daylight * Math.pow(1 - depthT, 1.6);
-    const nightDensityEase = 1 - 0.16 * underwaterNight;
-    const adjustedWaterDensity = waterDensity * (1 - 0.2 * shallowDayClarity) * nightDensityEase;
+
+    // Shallow tropical water should remain spatially legible even at night. Darkness
+    // comes mainly from the lighting and near-black night water colour; using dense
+    // black fog as the darkness mechanism wastes already-rendered distance and creates
+    // a hard visibility jump at the surface. Relax density strongly near the surface,
+    // then fade the benefit away with depth so the abyss can still become genuinely
+    // opaque. Night is deliberately a little clearer than day to compensate for the
+    // much darker illumination, not because the water itself becomes more transparent.
+    const shallowClarity = this.submergence * Math.pow(1 - depthT, 1.45);
+    const baselineDensityEase = 1 - 0.28 * shallowClarity;
+    const daylightDensityEase = 1 - 0.08 * shallowClarity * this.daylight;
+    const nightDensityEase = 1 - 0.16 * shallowClarity * underwaterNight;
+    const adjustedWaterDensity =
+      waterDensity * baselineDensityEase * daylightDensityEase * nightDensityEase;
+
     this.fog.density =
       AIR_FOG_DENSITY + (adjustedWaterDensity - AIR_FOG_DENSITY) * this.submergence;
 
